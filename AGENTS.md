@@ -61,6 +61,7 @@ remote/       si-progress（放到服务器上的进度上报小工具）
 promo/        发布视频源码（见 references/promo-video.md）
 site/         官网（纯静态，GitHub Pages；见 references/website.md）
 docs/         README 用的动图、截图、原理图（architecture[.zh].svg 是源文件）
+firmware/     USB 副屏固件（ESP32-S3 AMOLED，PlatformIO + LVGL；见 firmware/README.md、PROTOCOL.md）。**暂不开源：只在维护者本机，已加入 .gitignore，不要提交**
 cross/        Windows / Linux 版（C# + Avalonia；见 references/cross-platform.md）
   src/ServerIsland.Core/     与界面无关的逻辑（Swift 版 Models / Monitor / SSH 的逐文件移植）+ 内置 SSH
   src/ServerIsland.Desktop/  Avalonia 界面：Island/（刘海、桌宠）、Settings/、Ui/（配色 Hue、图标、小部件、Tako）、Platform/、Preview/
@@ -132,5 +133,6 @@ cross/scripts/build_mac_preview.sh --run              # 打包并在 Mac 上试�
 | `status-and-backlog.md` | 当前进度、未验证事项、待办和想法 |
 | `design-guide.md` | **两个版本共用的设计风格与开发规范**：配色、字号、尺寸、交互、图标、Tako、文案、代码规范、Swift ↔ C# 文件对照 |
 | `cross-platform.md` | Windows / Linux 版（`cross/`）：结构、命令、开发流程、哪些文件进 GitHub、平台差异、决策记录、踩坑、验证状态 |
+| `display-handoff.md` | **ESP32 副屏的交接文档**（本机文件，和 firmware/ 一样不进仓库）：现状、做到一半的任务和设计、构建烧录验证方法、踩过的坑。接手副屏相关工作先读它 |
 
 **本机私有文档**（`references/private/`，不进仓库；维护者的机器上才有）：`user-preferences.md`（维护者的偏好和已做的决定，**改需求前先看**）、`environment.md`（维护者的机器和服务器环境）。

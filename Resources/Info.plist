@@ -20,6 +20,10 @@
 	<string>4</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>ServerIsland connects to the optional ESP32 display over Bluetooth. 只在副屏设置里打开"也通过蓝牙连接"后才使用蓝牙。</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>ServerIsland shows today's events on the optional ESP32 display. 只在打开"外接副屏"的日程显示后才读取日历。</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHighResolutionCapable</key>

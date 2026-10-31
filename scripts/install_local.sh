@@ -23,5 +23,5 @@ xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 rm -rf "$ROOT/build/ServerIsland.app"
 
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
-echo "✓ 已安装 $APP（版本 $VERSION）"
+echo "✓ 已安装 ${APP}（版本 ${VERSION}）"
 open "$APP"

@@ -55,6 +55,8 @@ final class MonitorEngine: ObservableObject {
     /// 不支持 sacct 历史查询的主机（本次运行内不再尝试）。
     var sacctUnsupported: Set<UUID> = []
     var onEvent: ((IslandEvent) -> Void)?
+    /// USB 副屏（没插也照样存在，只是不发）。
+    var displayLink: DisplayLink?
 
     init(store: ConfigStore, demo: Bool = false) {
         self.store = store
@@ -912,6 +914,7 @@ final class MonitorEngine: ObservableObject {
                      + (quiet ? " · 勿扰时段" : "") + "）")
         onEvent?(event)
         if quiet { return }
+        displayLink?.send(event: event)
         if store.settings.soundEnabled, event.kind != .started {
             SoundPlayer.shared.play(event.kind == .failed ? .failure : (event.kind == .warning ? .warning : .success),
                                     volume: store.settings.soundVolume)

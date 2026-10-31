@@ -38,6 +38,7 @@ final class SettingsWindowController {
 enum SettingsPage: Hashable {
     case general
     case rules
+    case display
     case host(UUID)
 }
 
@@ -82,6 +83,13 @@ struct SettingsView: View {
                                    : L("\(store.settings.progressRules.count) 条自定义规则", "\(store.settings.progressRules.count) custom rules"),
                                symbol: "wand.and.stars", tint: .indigo)
                         .tag(SettingsPage.rules)
+                    // 外接副屏：只有在通用页底部打开以后才出现。
+                    if store.settings.usbDisplay {
+                        SidebarRow(title: L("副屏", "Display"),
+                                   subtitle: engine.displayLink?.connected == true ? L("已连接", "Connected") : L("ESP32 小屏幕", "ESP32 screen"),
+                                   symbol: "display", tint: .teal)
+                            .tag(SettingsPage.display)
+                    }
                 }
                 Section {
                     ForEach(store.settings.hosts) { host in
@@ -153,6 +161,13 @@ struct SettingsView: View {
                     }
                 case .rules:
                     ProgressRulesView(store: store, engine: engine)
+                case .display:
+                    if store.settings.usbDisplay {
+                        DisplaySettingsView(store: store, link: engine.displayLink)
+                            .navigationTitle(L("副屏", "Display"))
+                    } else {
+                        GeneralSettingsView(store: store, engine: engine)
+                    }
                 default:
                     GeneralSettingsView(store: store, engine: engine)
                 }
@@ -167,6 +182,8 @@ struct SettingsView: View {
             }
         }
         .onChange(of: store.settings.hosts) { _, _ in engine.sync() }
+        // 关掉"外接副屏"时，副屏页从侧栏消失：回到通用页。
+        .onChange(of: store.settings.usbDisplay) { _, on in if !on && selection == .display { selection = .general } }
         .frame(minWidth: 760, minHeight: 520)
         // 切换语言后整页重绘。
         .id(store.settings.language)
@@ -575,6 +592,14 @@ struct GeneralSettingsView: View {
                     Button(L("立即刷新全部", "Refresh All")) { engine.refreshAll() }
                 }
             } header: { SettingsHeader(title: L("文件与诊断", "Files & Diagnostics"), symbol: "folder.fill", tint: .gray) }
+
+            Section {
+                Toggle(isOn: $store.settings.usbDisplay) {
+                    HelpLabel(L("外接副屏（ESP32）", "External Display (ESP32)"),
+                              help: L("把任务状态、AI 编程工具的提醒显示在一块刷了 ServerIsland 固件的 ESP32 小屏幕上（固件暂未公开）。打开后侧栏多一个\"副屏\"页面。没有这种屏幕就不用管它。",
+                                      "Mirror job status and AI coding-tool alerts on a small ESP32 screen running the ServerIsland firmware (not yet public). Turning this on adds a Display page to the sidebar. Ignore it if you don't have one."))
+                }
+            } header: { SettingsHeader(title: L("扩展", "Extensions"), symbol: "puzzlepiece.extension.fill", tint: .teal) }
         }
         .formStyle(.grouped)
         .navigationTitle(L("通用", "General"))

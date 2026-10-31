@@ -7,6 +7,13 @@ if AskPass.isAskPassInvocation {
     exit(MainActor.assumeIsolated { AskPass.run() })
 }
 
+// 作为 AI 编程工具的钩子被调用：记一条会话事件就退出（见 AgentMonitor.swift）。
+//   ServerIsland --agent-event claude|opencode [事件 JSON；不给就从标准输入读]
+if let i = arguments.firstIndex(of: "--agent-event"), i + 1 < arguments.count {
+    AgentEvents.record(tool: arguments[i + 1], argument: i + 2 < arguments.count ? arguments[i + 2] : nil)
+    exit(0)
+}
+
 // 开发用：把各个状态的刘海渲染成 PNG（不需要屏幕录制权限）。
 //   ServerIsland --render-preview <输出目录> [zh|en]（默认中文）
 if let i = arguments.firstIndex(of: "--render-preview"), i + 1 < arguments.count {
@@ -59,6 +66,17 @@ if let i = arguments.firstIndex(of: "--dump-scripts"), i + 1 < arguments.count {
         try? text.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
     }
     print("ok")
+    exit(0)
+}
+
+// 开发用：读一次 CC Switch 的 AI 用量，打印发给副屏的 JSON（只读）。
+if arguments.contains("--ai-usage") {
+    guard let msg = AIUsage.snapshot(),
+          let data = try? JSONSerialization.data(withJSONObject: msg, options: [.prettyPrinted, .sortedKeys]) else {
+        print("没有找到 CC Switch 的数据库：\(AIUsage.databasePath)")
+        exit(1)
+    }
+    print(String(decoding: data, as: UTF8.self))
     exit(0)
 }
 

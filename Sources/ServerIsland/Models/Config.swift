@@ -252,6 +252,13 @@ struct HostConfig: Codable, Identifiable, Equatable {
     }
 }
 
+/// 一个截止日期（副屏上倒计时）。
+struct Deadline: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var title: String
+    var date: Date
+}
+
 struct WatchedProcess: Codable, Equatable, Identifiable {
     var pid: String
     var name: String
@@ -302,6 +309,19 @@ struct AppSettings: Codable, Equatable {
     var quietHours = false
     var quietStart = 23 * 60
     var quietEnd = 8 * 60
+    /// 外接副屏（ESP32 固件，暂不进仓库）。默认关：不知道有这块板子的用户看不到任何相关设置。
+    /// 打开后设置窗口侧栏多一个"副屏"页面，插上 USB（或打开蓝牙）就自动连接并推送状态。
+    var usbDisplay = false
+    /// 也通过蓝牙连接（插着 USB 时仍然优先用 USB）。
+    var displayBluetooth = false
+    /// 电脑锁屏 / 睡眠时副屏一起熄屏。
+    var displayLockSync = true
+    /// 副屏的日历页显示 macOS 日历里的日程（需要授权）。
+    var displayCalendar = false
+    /// 截止日期倒计时（副屏的时钟和日历上显示）。
+    var deadlines: [Deadline] = []
+    /// 副屏上显示天气的城市（空 = 不显示；数据来自 Open-Meteo）。
+    var weatherCity = ""
 
     init() {}
 
@@ -328,6 +348,12 @@ struct AppSettings: Codable, Equatable {
         alertStarted = try c.decodeIfPresent(Bool.self, forKey: .alertStarted) ?? true
         alertFinished = try c.decodeIfPresent(Bool.self, forKey: .alertFinished) ?? true
         alertFailed = try c.decodeIfPresent(Bool.self, forKey: .alertFailed) ?? true
+        usbDisplay = try c.decodeIfPresent(Bool.self, forKey: .usbDisplay) ?? false
+        displayBluetooth = try c.decodeIfPresent(Bool.self, forKey: .displayBluetooth) ?? false
+        displayLockSync = try c.decodeIfPresent(Bool.self, forKey: .displayLockSync) ?? true
+        displayCalendar = try c.decodeIfPresent(Bool.self, forKey: .displayCalendar) ?? false
+        deadlines = try c.decodeIfPresent([Deadline].self, forKey: .deadlines) ?? []
+        weatherCity = try c.decodeIfPresent(String.self, forKey: .weatherCity) ?? ""
         alertUnknown = try c.decodeIfPresent(Bool.self, forKey: .alertUnknown) ?? true
         quietHours = try c.decodeIfPresent(Bool.self, forKey: .quietHours) ?? false
         quietStart = try c.decodeIfPresent(Int.self, forKey: .quietStart) ?? 23 * 60

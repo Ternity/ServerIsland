@@ -14,3 +14,7 @@ cross/**/obj/
 
 # 本地测试用的计算算例（不上传）
 /test/
+
+# USB 副屏固件和交接文档暂不开源（只在维护者本机）
+/firmware/
+/references/display-handoff.md

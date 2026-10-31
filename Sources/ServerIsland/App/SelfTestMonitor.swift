@@ -151,6 +151,111 @@ enum SelfTestMonitor {
         check(bad.settings == nil && bad.problem != nil && !bad.blockSave && backups.count == 1
               && (try? String(contentsOf: dir.appendingPathComponent(backups[0]), encoding: .utf8)) == broken,
               "配置：读取失败时先备份原文件并说明原因")
+
+        // —— Agent 钩子：只追加 / 删除我们自己的那几条，用户原有的钩子和设置不动 ——
+        let hookFile = dir.appendingPathComponent("settings.json")
+        let original = #"{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"python3 other.py"}]}],"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"x"}]}]}}"#
+        try? Data(original.utf8).write(to: hookFile)
+        let installErr = AgentHooks.setClaude(installed: true, at: hookFile, executable: "/Apps/SI")
+        let installed = (try? JSONSerialization.jsonObject(with: Data(contentsOf: hookFile))) as? [String: Any]
+        let hookMap = installed?["hooks"] as? [String: Any]
+        check(installErr == nil && AgentHooks.claudeInstalled(at: hookFile) && (hookMap?["Stop"] as? [Any])?.count == 2
+              && (hookMap?["PreToolUse"] as? [Any])?.count == 2 && installed?["theme"] as? String == "dark",
+              "Agent 钩子：安装时保留原有的钩子和设置")
+        AgentHooks.setClaude(installed: false, at: hookFile)
+        let restored = (try? JSONSerialization.jsonObject(with: Data(contentsOf: hookFile))) as? NSDictionary
+        let originalObj = (try? JSONSerialization.jsonObject(with: Data(original.utf8))) as? NSDictionary
+        check(restored != nil && restored == originalObj && !AgentHooks.claudeInstalled(at: hookFile), "Agent 钩子：卸载后和原来一样")
+
+        // 用临时会话重现中间消息、错轮次和内部辅助会话导致的完成误报。
+        MainActor.assumeIsolated {
+            let monitor = AgentMonitor()
+            var alerts = 0
+            monitor.onAlert = { _ in alerts += 1 }
+            let root = dir.appendingPathComponent("root.jsonl")
+            let child = dir.appendingPathComponent("child.jsonl")
+            func append(_ file: URL, _ type: String, _ payload: [String: Any], at: Date = Date()) {
+                let obj: [String: Any] = ["type": type, "timestamp": ISO8601DateFormatter.fractional.string(from: at), "payload": payload]
+                var data = try! JSONSerialization.data(withJSONObject: obj)
+                data.append(0x0A)
+                if !FileManager.default.fileExists(atPath: file.path) { try! data.write(to: file) }
+                else {
+                    let h = try! FileHandle(forWritingTo: file)
+                    defer { try? h.close() }
+                    try! h.seekToEnd()
+                    try! h.write(contentsOf: data)
+                }
+            }
+            append(root, "session_meta", ["source": "vscode", "cwd": "/demo"])
+            append(root, "event_msg", ["type": "task_started", "turn_id": "one"])
+            monitor.readCodex(root, alert: false)
+            append(root, "response_item", ["role": "assistant", "channel": "commentary"])
+            append(root, "event_msg", ["type": "task_complete", "turn_id": "old"])
+            monitor.readCodex(root, alert: true)
+            check(alerts == 0 && monitor.list.first?.state == .working, "Codex：中间消息和其它轮次完成不误报")
+            append(root, "event_msg", ["type": "task_complete", "turn_id": "one"])
+            monitor.readCodex(root, alert: true)
+            monitor.readCodex(root, alert: true)
+            check(alerts == 1 && monitor.list.first?.state == .done, "Codex：当前轮次完成只提醒一次")
+            append(root, "event_msg", ["type": "task_started", "turn_id": "two"])
+            append(root, "event_msg", ["type": "turn_aborted", "turn_id": "two"])
+            monitor.readCodex(root, alert: true)
+            check(alerts == 1, "Codex：中断不报回答完毕")
+            append(child, "session_meta", ["source": ["subagent": ["other": "guardian"]], "parent_thread_id": "parent"])
+            append(child, "response_item", ["text": String(repeating: "x", count: 450_000)])
+            append(child, "event_msg", ["type": "task_started", "turn_id": "child"])
+            append(child, "event_msg", ["type": "task_complete", "turn_id": "child"])
+            monitor.readCodex(child, alert: true)
+            check(alerts == 1 && monitor.sessions.count == 1, "Codex：从长文件尾部读取也过滤内部辅助会话")
+            append(root, "event_msg", ["type": "task_started", "turn_id": "past"], at: Date().addingTimeInterval(-3600))
+            append(root, "event_msg", ["type": "task_complete", "turn_id": "past"], at: Date().addingTimeInterval(-3500))
+            monitor.readCodex(root, alert: true)
+            check(alerts == 1, "Codex：不补报历史完成事件")
+
+            append(root, "event_msg", ["type": "task_started", "turn_id": "questions"])
+            let args = #"{"questions":[{"title":"Pick a mode"},{"title":"Pick a duration"}]}"#
+            append(root, "response_item", ["type": "function_call", "name": "request_user_input_async", "call_id": "ask", "arguments": args])
+            append(root, "response_item", ["type": "function_call_output", "call_id": "ask", "output": #"{"accepted":true}"#])
+            monitor.readCodex(root, alert: true)
+            check(alerts == 2 && monitor.list.first?.state == .attention, "Codex：异步提问会提醒，受理回执不清除等待状态")
+            @MainActor func answer(_ index: Int) {
+                let id = String(data: try! JSONSerialization.data(withJSONObject: ["request_user_input_async", "ask", index]), encoding: .utf8)!
+                let replies = String(data: try! JSONSerialization.data(withJSONObject: [["questionItemId": id, "answer": "A"]]), encoding: .utf8)!
+                append(root, "response_item", ["type": "message", "role": "user", "content": [["type": "input_text", "text": "<send_user_message_question_reply>\n\(replies)\n</send_user_message_question_reply>"]]])
+                monitor.readCodex(root, alert: true)
+            }
+            answer(0)
+            check(monitor.list.first?.state == .attention && alerts == 2, "Codex：部分答复仍保留其余待答问题")
+            answer(1)
+            check(monitor.list.first?.state == .working && alerts == 2, "Codex：全部答复后恢复工作，不报回答完毕")
+            append(root, "response_item", ["type": "function_call", "name": "functions.request_user_input", "call_id": "sync", "arguments": args])
+            monitor.readCodex(root, alert: true)
+            append(root, "response_item", ["type": "function_call_output", "call_id": "sync", "output": #"{"answers":{}}"#])
+            monitor.readCodex(root, alert: true)
+            check(alerts == 3 && monitor.list.first?.state == .working, "Codex：同步提问和返回结果配对，不重复提醒")
+
+            let tools = AgentMonitor()
+            var needsInput = 0
+            tools.onAlert = { if $0.state == .attention { needsInput += 1 } }
+            tools.apply(["tool": "claude", "session": "c", "event": "PreToolUse", "toolName": "AskUserQuestion"], alert: true)
+            check(tools.list.first?.state == .attention && needsInput == 1, "Claude：AskUserQuestion 进入等待回答并提醒")
+            tools.apply(["tool": "claude", "session": "c", "event": "PostToolUse", "toolName": "AskUserQuestion"], alert: true)
+            tools.apply(["tool": "claude", "session": "c", "event": "Notification", "kind": "elicitation_response"], alert: true)
+            check(tools.list.first?.state == .working && needsInput == 1, "Claude：问题答复或 MCP 答复后恢复，不再次报需要确认")
+            let t0 = Date().timeIntervalSince1970 + 10
+            tools.apply(["tool": "claude", "session": "late", "event": "PermissionRequest", "toolName": "Bash", "at": t0], alert: true)
+            tools.apply(["tool": "claude", "session": "late", "event": "PostToolUse", "toolName": "Bash", "at": t0 + 3], alert: true)
+            tools.apply(["tool": "claude", "session": "late", "event": "Notification", "kind": "permission_prompt", "at": t0 + 1], alert: true)
+            check(tools.sessions["claude|late"]?.state == .working && needsInput == 2, "Claude：晚到的 permission_prompt 通知不会把已批准的会话改回需要确认")
+            tools.apply(["tool": "opencode", "session": "o", "event": "question.asked", "message": "Choose a mode"], alert: true)
+            check(needsInput == 3, "OpenCode：question.asked 会提醒")
+            tools.apply(["tool": "opencode", "session": "o", "event": "question.replied"], alert: true)
+            tools.apply(["tool": "opencode", "session": "o", "event": "permission.asked"], alert: true)
+            tools.apply(["tool": "opencode", "session": "o", "event": "permission.replied"], alert: true)
+            check(needsInput == 4 && tools.sessions["opencode|o"]?.state == .working, "OpenCode：问题及权限答复均解除等待")
+            tools.apply(["tool": "opencode", "session": "o", "event": "session.status", "status": "idle"], alert: false)
+            check(tools.sessions["opencode|o"]?.state == .done, "OpenCode：idle 状态不会误判为工作中")
+        }
     }
 
     /// 一段样例输出：每段 (名字, 退出码, 行)；退出码为 nil 时这段整个缺失（输出被截断等）。

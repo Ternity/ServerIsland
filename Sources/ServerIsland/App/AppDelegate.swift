@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settings = SettingsWindowController(store: store, engine: engine)
         island = IslandController(engine: engine, store: store) { [weak self] in self?.settings.show() }
         engine.onEvent = { [weak self] e in self?.postNotification(e) }
+        engine.displayLink = DisplayLink(engine: engine, store: store)
         // 按设置的天数清理诊断日志：启动时一次，之后每 6 小时一次。
         DebugLog.prune(days: store.settings.logRetentionDays)
         logPruneTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
@@ -43,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupStatusItem()
         island.show()
         engine.start()
+        engine.displayLink?.start()
 
         if store.settings.systemNotifications && !demo {
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }

@@ -159,12 +159,18 @@ enum PreviewRenderer {
         }
 
         // 设置窗口（离屏窗口 + cacheDisplay，不需要屏幕录制权限）
-        func settingsShot(_ name: String, _ page: SettingsPage, dark: Bool, height: CGFloat = 640) {
+        func settingsShot(_ name: String, _ page: SettingsPage, dark: Bool, height: CGFloat = 640, campusOnly: Bool = false) {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 880, height: height), styleMask: [.titled, .fullSizeContentView],
                              backing: .buffered, defer: false)
             w.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             w.titlebarAppearsTransparent = true
-            let hv = NSHostingView(rootView: SettingsView(store: store, engine: engine, initial: page))
+            let hv = NSHostingView(rootView: Group {
+                if campusOnly {
+                    Form { CampusNetworkSection(link: DisplayLink(engine: engine, store: store)) }.formStyle(.grouped)
+                } else {
+                    SettingsView(store: store, engine: engine, initial: page)
+                }
+            })
             w.contentView = hv
             w.setFrameOrigin(NSPoint(x: -5000, y: -5000))
             w.orderFrontRegardless()
@@ -192,6 +198,11 @@ enum PreviewRenderer {
         store.settings.quietHours = true
         settingsShot("settings-general-full", .general, dark: true, height: 2000)
         store.settings.quietHours = false
+        // 副屏页（打开"外接副屏"后才出现；没有连接时板子设置那组不显示）
+        store.settings.usbDisplay = true
+        settingsShot("settings-display", .display, dark: true, height: 900)
+        settingsShot("settings-campus", .display, dark: true, height: 1000, campusOnly: true)
+        store.settings.usbDisplay = false
         store.settings.hosts[0].pathFilter = "~/projects/LiCoO2"
         settingsShot("settings-host-full", .host(store.settings.hosts[0].id), dark: true, height: 3600)
         store.settings.hosts[0].pathFilter = ""
