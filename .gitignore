@@ -5,9 +5,6 @@ build/
 .swiftpm/
 promo/node_modules/
 promo/out/
-promo/display/node_modules/
-promo/display/out/
-promo/display/assets/
 references/*.mp4
 references/private/
 
@@ -21,6 +18,10 @@ cross/**/obj/
 # USB 副屏固件和交接文档暂不开源（只在维护者本机）
 /firmware/
 /references/display-handoff.md
+# 副屏宣传片和闲鱼详情图的源码（官网用的图已经拷到 site/assets/display/）
+/promo/display/
+# 闲鱼主页原始截图（官网用的是裁好的 site/assets/display/xianyu-qr.png）
+/xianyu.jpg
 
 # 版权 / 商标申请材料（只在维护者本机）
 /ip/

@@ -2,17 +2,17 @@
   <img src="./Branding/logo-1024.png" width="22%" alt="ServerIsland Logo">
 </p>
 <p align="center">
-  <strong>English</strong>
+  <strong>简体中文</strong>
   &nbsp;·&nbsp;
-  <a href="./README.zh-CN.md">简体中文</a>
+  <a href="./README.en.md">English</a>
   &nbsp;·&nbsp;
-  <a href="https://zhyan0603.github.io/ServerIsland/">Website</a>
+  <a href="https://zhyan0603.github.io/ServerIsland/">官网</a>
   &nbsp;·&nbsp;
-  <a href="https://zhyan0603.github.io/ServerIsland/manual.html">Guide</a>
+  <a href="https://zhyan0603.github.io/ServerIsland/manual.html">使用手册</a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/zhyan0603/ServerIsland/releases/latest">Download</a>
+  <a href="https://github.com/zhyan0603/ServerIsland/releases/latest">下载</a>
   &nbsp;·&nbsp;
-  <a href="./CONTRIBUTING.md">Contributing</a>
+  <a href="./CONTRIBUTING.md">参与贡献</a>
 </p>
 <p align="center">
   <a href="https://github.com/zhyan0603/ServerIsland/releases"><img src="https://img.shields.io/github/v/release/zhyan0603/ServerIsland?label=Version&style=flat-square&color=brightgreen" alt="Version"></a>
@@ -25,79 +25,98 @@
   <a href="https://github.com/zhyan0603/ServerIsland/graphs/contributors"><img src="https://img.shields.io/github/contributors/zhyan0603/ServerIsland?style=flat-square&color=brightgreen&label=Contributors" alt="Contributors"></a>
 </p>
 
-<p style="text-align: justify;"><strong>ServerIsland</strong> puts your remote computations in the MacBook notch — and, on Windows and Linux, at the top of your screen or on your desktop. It watches Slurm and PBS clusters and plain Linux servers over SSH and shows your jobs, GPUs and the <em>live progress</em> of VASP, LAMMPS, GPUMD and NEP runs in a Dynamic-Island-style panel — with nothing installed on the server. It is built for people who spend their days in computational materials science, chemistry and physics, and are tired of typing <code>squeue</code> and <code>tail -f</code> every twenty minutes.</p>
+<p style="text-align: justify;"><strong>ServerIsland</strong> 把你的远程计算装进 MacBook 的刘海里；在 Windows 和 Linux 上，它待在屏幕顶部或你的桌面上。它通过 SSH 查看 Slurm、PBS 集群和普通 Linux 服务器，把作业、GPU 占用，以及 VASP、LAMMPS、GPUMD、NEP 的<em>实时进度</em>放进一个"灵动岛"式的面板，服务器上什么都不用装。它为每天和计算材料、计算化学、计算物理打交道的人而做，让你不用再每隔二十分钟敲一遍 <code>squeue</code> 和 <code>tail -f</code>。</p>
 
 <p align="center">
-  <a href="https://zhyan0603.github.io/ServerIsland/"><img src="./docs/hero-en.png" width="100%" alt="ServerIsland: the collapsed notch, a 'NEP training finished' alert, and the expanded panel with one card per server"></a>
+  <a href="https://zhyan0603.github.io/ServerIsland/"><img src="./docs/hero-zh.png" width="100%" alt="ServerIsland：收起的刘海、“NEP 训练完成”提醒，以及每台服务器一张卡片的展开面板"></a>
 </p>
-<p align="center">▶ <a href="https://zhyan0603.github.io/ServerIsland/manual.html#video-guide">Watch the 3-minute video tour</a></p>
+<p align="center">▶ <a href="https://zhyan0603.github.io/ServerIsland/manual.html#video-guide">观看 3 分钟视频教程</a></p>
 
-## Features
+## 功能
 
-- **Every Server at a Glance**: Hover the notch to see one card per server — running / pending counts, CPU, memory and GPUs. Idle servers fold into a single line.
-- **Real Progress, Not Just "RUNNING"**: Detects NEP, TorchNEP, MACE, DeePMD-kit, GPUMD, VASP and LAMMPS from the job's working directory and shows progress, speed and ETA, plus loss curves and, for VASP relaxations, energy and max-force curves.
-- **Slurm and PBS Done Right**: Job arrays as one segmented bar, pending reasons in plain words, free CPUs / GPUs / DCUs per Slurm partition, and 7 days of history with each job's folder. PBS Pro, OpenPBS and Torque work too.
-- **Only What You Care About**: Limit a server to jobs and processes under certain folders, e.g. `~/projects/LLZO`.
-- **Alerts You Can Hear**: A notch pop-up with distinct sounds for success and failure — it can tell a clean finish from an early exit even without Slurm accounting. Star the jobs that matter, alert for starred jobs only, and set quiet hours.
-- **On Your Phone, Too**: Paste a WeCom group bot's webhook and starred jobs (or all of them) send a detailed message to WeCom / WeChat when they finish or fail — sent by your computer, so your phone never connects to the servers.
-- **What It Cost**: Set a price per partition and see estimated costs per job, per day and per month from what the scheduler allocated.
-- **Your Own Programs, Too**: Write a custom rule (a file name + a keyword or regex) and test it against a real directory right from Settings.
-- **Zero Footprint**: No agent, no daemon, no root. One SSH channel per server per poll, reusing a single connection; your `~/.ssh/config` just works — or type the address, user, port and key into Settings if you never wrote one.
-- **Any Login**: Key, password, key + password, or one-time codes, optionally through one or more jump hosts — each hop asks and reports errors on its own.
-- **Safe by Default**: Cancelling is off unless enabled per server, and then needs a long press, a confirmation and a server-side re-check. Passwords and one-time codes are typed into a native dialog and not stored by default; tick “Remember” to keep a password in the system keychain (one-time codes are never stored).
-- **Tako**: A pixel octopus lives in the notch — busy while jobs run, happy when they finish, red when something breaks.
+- **一眼看完所有服务器**：鼠标移到刘海上，每台服务器一张卡片：运行数、排队数、CPU、内存、GPU。空闲的机器自动合并成一行。
+- **真实进度，而不只是 "RUNNING"**：按工作目录里的文件识别 NEP、TorchNEP、MACE、DeePMD-kit、GPUMD、VASP、LAMMPS，显示进度、速度和剩余时间，还有 loss 曲线，VASP 结构优化的能量和最大力曲线。
+- **好好对待 Slurm 和 PBS**：数组作业合并成一条分段进度条；排队原因翻译成人话；按需查看 Slurm 各分区的空闲 CPU / GPU / DCU；保留 7 天的历史记录，带工作目录。PBS Pro、OpenPBS、Torque 也支持。
+- **只看你关心的**：可以让一台服务器只显示某些目录（比如 `~/projects/LLZO`）下的作业和进程。
+- **听得见的提醒**：刘海弹窗，成功和失败是两种提示音。就算集群没开作业记录，也能分辨正常结束还是提前退出。可以给重要的任务点星、只提醒关注的任务，还有勿扰时段。
+- **手机上也能收到**：粘贴企业微信群机器人的 Webhook，关注的任务（或全部任务）结束、失败时，会给企业微信 / 微信发一条详细的消息。消息由电脑发出，手机不连服务器。
+- **花了多少钱**：按分区填单价，按调度系统分配的资源估算每个作业、每天、每月的费用。
+- **你自己的程序也行**：写一条自定义规则（文件名 + 关键字或正则），在设置里就能对着服务器上的真实目录当场测试。
+- **服务器上零负担**：不装 agent、不跑守护进程、不要 root。每台机器每轮一个 SSH 通道，并复用同一条连接；`~/.ssh/config` 照常生效，没写过也可以在设置里直接填地址、用户名、端口和私钥。
+- **各种登录方式**：密钥、密码、密钥 + 密码、动态口令都支持；可以经过一级或多级跳板机，每一跳分别询问、分别报错。
+- **默认就安全**：取消任务默认关闭，要按服务器单独打开；打开后也要长按、二次确认，执行前还会在服务器上再核对一次。密码 / 动态口令用原生对话框输入，默认不保存；勾选“记住密码”时只存进系统钥匙串（动态口令从不保存）。
+- **Tako**：刘海里住着一只像素小章鱼，任务在跑时手舞足蹈，完成了开心蹦跶，出错了会变红。
 
-## Supported Software
+## 支持的计算软件
 
-| Software | Detected from | What you see |
+| 软件 | 判断依据 | 你能看到 |
 |---|---|---|
-| **NEP / GNEP** | `loss.out` + `nep.in` / `gnep.in` | generation, losses, speed, ETA, loss curve |
-| **TorchNEP** | `loss.out` with a `# epoch  loss …` header | epochs, errors, speed, ETA, error curves |
-| **MACE** | `logs/*.log` | epoch / `max_num_epochs`, validation errors and curves |
-| **DeePMD-kit** | `lcurve.out` + log / `input.json` | steps, energy / force errors, E / F / V curves (TensorFlow and PyTorch) |
-| **GPUMD** | `run.in` + `neighbor.out` / `thermo.out` | steps, speed, ETA |
-| **VASP** | `INCAR` + `OSZICAR` | MD as a percentage · relaxation as ionic steps with an energy curve · SCF as electronic steps |
-| **LAMMPS** | `log.lammps` | steps of the last `run`; `Total wall time` marks a clean finish |
-| **Anything else** | a custom rule | any *current / total* your program writes, e.g. `epoch 37/100` |
+| **NEP / GNEP** | `loss.out` + `nep.in` / `gnep.in` | 代数、各项 loss、速度、剩余时间、loss 曲线 |
+| **TorchNEP** | 表头是 `# epoch  loss …` 的 `loss.out` | epoch、各项误差、速度、剩余时间、误差曲线 |
+| **MACE** | `logs/*.log` | epoch / `max_num_epochs`、验证集误差和曲线 |
+| **DeePMD-kit** | `lcurve.out` + 日志 / `input.json` | 步数、能量 / 力误差、E / F / V 曲线（TensorFlow 和 PyTorch 后端） |
+| **GPUMD** | `run.in` + `neighbor.out` / `thermo.out` | 步数、速度、剩余时间 |
+| **VASP** | `INCAR` + `OSZICAR` | MD 显示百分比 · 结构优化显示离子步和能量曲线 · 单点显示电子步 |
+| **LAMMPS** | `log.lammps` | 最后一段 `run` 的步数；以 `Total wall time` 判断正常结束 |
+| **其他程序** | 自定义规则 | 程序输出的任意"当前 / 目标"，比如 `epoch 37/100` |
 
-Detection only reads file tails. If anything doesn't look as expected, ServerIsland shows **nothing rather than a wrong number**. Missing your package? [Adding a detector](./CONTRIBUTING.md) is a great first contribution.
+识别只读文件末尾；只要有一处和预期不一致，就**宁可不显示，也不给你一个错的数字**。你的软件不在列表里？[新增一种识别](./CONTRIBUTING.md)是很好的第一个贡献。
 
-## Installation
+## 桌面副屏
 
-Download the package for your platform from **[Releases](https://github.com/zhyan0603/ServerIsland/releases/latest)**. No account, no extra runtime, and nothing to install on your servers.
+想把任务进度放在桌上随时看？**ServerIsland 桌面副屏**是一块 2.16 寸 AMOLED 触摸小屏，已刷好固件，插上 USB 就能和电脑上的 ServerIsland 连起来：任务进度、服务器资源、AI 用量、Claude Code / Codex / OpenCode 的状态一眼看清，需要你出手时"叮咚"一声。Mac / Windows 支持 USB 和蓝牙，Linux 支持 USB；服务器上同样什么都不用装。
 
-| Platform | Download | Requirements |
+<table>
+  <tr>
+    <td width="33%" align="center"><img src="./site/assets/display/desk.jpg" alt="桌面副屏放在笔记本旁边"></td>
+    <td width="33%" align="center"><img src="./site/assets/display/ring.jpg" alt="任务进度环"></td>
+    <td width="33%" align="center"><img src="./site/assets/display/alerts.jpg" alt="Agent 需要确认时的提醒"></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="150" align="center"><img src="./site/assets/display/xianyu-qr.png" width="140" alt="闲鱼二维码"></td>
+    <td><b>在闲鱼上购买</b>：打开闲鱼 App 扫一扫左边的二维码，价格和库存以闲鱼页面为准。<br>更多图片和参数见<a href="https://zhyan0603.github.io/ServerIsland/#display">官网</a>，怎么连接见<a href="https://zhyan0603.github.io/ServerIsland/manual.html#display">使用手册</a>。<br><sub>图片为渲染效果图，屏幕上是演示数据。副屏固件暂不开源；电脑端的支持就在 ServerIsland 里，免费开源。</sub></td>
+  </tr>
+</table>
+
+## 安装
+
+从 **[Releases](https://github.com/zhyan0603/ServerIsland/releases/latest)** 下载对应平台的安装包即可：免费、不需要账号、不需要另装运行环境，服务器上也什么都不用装。
+
+| 平台 | 下载 | 要求 |
 |---|---|---|
-| **macOS** | `ServerIsland-x.y.z.dmg` | macOS 14+, Apple silicon or Intel |
-| **Windows** | `ServerIsland-x.y.z-win-x64.zip` | Windows 10 / 11, 64-bit |
-| **Linux** | `ServerIsland-x.y.z-linux-x64.tar.gz` | x64, X11 or XWayland, a system tray |
+| **macOS** | `ServerIsland-x.y.z.dmg` | macOS 14 及以上，Apple 芯片或 Intel |
+| **Windows** | `ServerIsland-x.y.z-win-x64.zip` | Windows 10 / 11，64 位 |
+| **Linux** | `ServerIsland-x.y.z-linux-x64.tar.gz` | x64，X11 或 XWayland，需要系统托盘 |
 
-- **macOS**: open the DMG and drag **ServerIsland** into Applications. It isn't notarized by Apple, so the first launch is blocked once: on macOS 15+, open it, then click **Open Anyway** in *System Settings → Privacy & Security*; on macOS 14, Control-click the app and choose **Open**.
-- **Windows**: unzip anywhere and double-click `ServerIsland.exe`. If you see "Windows protected your PC", click **More info → Run anyway**.
-- **Linux**: `tar xzf ServerIsland-*.tar.gz && ./ServerIsland`. On GNOME, install the AppIndicator extension so the tray icon shows up.
+- **macOS**：打开 DMG，把 **ServerIsland** 拖进"应用程序"。App 没有经过 Apple 公证，第一次打开会被拦一下：macOS 15 及以后，先打开一次，再到 *系统设置 → 隐私与安全性* 点 **仍要打开**；macOS 14 按住 Control 点 App，选 **打开**。
+- **Windows**：解压到任意位置，双击 `ServerIsland.exe`。如果出现"Windows 已保护你的电脑"，点 **更多信息 → 仍要运行**。
+- **Linux**：`tar xzf ServerIsland-*.tar.gz && ./ServerIsland`。GNOME 需要装 AppIndicator 扩展才能看到托盘图标。
 
-On Windows and Linux there's no notch: ServerIsland hangs from the top center of the screen, or lives on your desktop as Tako the pet (*Settings → General → Display Style*), with a tray icon either way.
+Windows 和 Linux 上没有刘海：ServerIsland 挂在屏幕顶部正中，也可以变成待在桌面上的小章鱼 Tako（*设置 → 通用 → 显示方式*），两种方式都有托盘图标。
 
-## Usage
+## 使用
 
-1. On first launch, the settings window opens. Click **Add Server** and pick hosts from your `~/.ssh/config`.
-2. Choose **Slurm**, **PBS** or **Direct** for each server (or let ServerIsland detect it).
-3. That's it — hover the notch (or the island / Tako on Windows and Linux).
+1. 第一次启动会打开设置。点 **添加服务器**，从 `~/.ssh/config` 里勾选机器。
+2. 为每台机器选择 **Slurm**、**PBS** 或 **直连**（也可以自动检测）。
+3. 完成，把鼠标移到刘海上看看（Windows / Linux 上是屏幕顶部的灵动岛或桌面上的 Tako）。
 
-Want to look around first? Start the demo with fake servers: `open /Applications/ServerIsland.app --args --demo` on macOS, `ServerIsland.exe --demo` on Windows, `./ServerIsland --demo` on Linux.
+想先看看效果？用几台假服务器启动演示模式：macOS 上 `open /Applications/ServerIsland.app --args --demo`，Windows 上 `ServerIsland.exe --demo`，Linux 上 `./ServerIsland --demo`。
 
-The **[User Guide](https://zhyan0603.github.io/ServerIsland/manual.html)** covers logins with passwords / one-time codes, alerts, custom progress rules and troubleshooting; the **[Feature Tour](https://zhyan0603.github.io/ServerIsland/features.html)** explains everything ServerIsland does.
+**[使用手册](https://zhyan0603.github.io/ServerIsland/manual.html)** 介绍了密码 / 动态口令登录、提醒、推送到手机、估算费用、桌面副屏、自定义进度规则和常见问题；**[功能详解](https://zhyan0603.github.io/ServerIsland/features.html)** 介绍了 ServerIsland 能做的每一件事。
 
 <details>
-<summary><b>Report progress from your own scripts</b></summary>
+<summary><b>让自己的脚本上报进度</b></summary>
 
-Besides custom rules, any script can write a one-line JSON file to `~/.serverisland/progress/<name>.json` on the server:
+除了自定义规则，脚本也可以往服务器的 `~/.serverisland/progress/<名称>.json` 写一行 JSON：
 
 ```json
 {"name": "train", "progress": 0.62, "message": "epoch 62/100", "jobid": "8812044"}
 ```
 
-Entries with a `jobid` are merged into that Slurm job. [`remote/si-progress`](./remote/si-progress) is a ready-made helper:
+带 `jobid` 的条目会合并到对应的 Slurm 作业上；`status` 填 `done` 或 `failed` 会触发提醒。[`remote/si-progress`](./remote/si-progress) 是现成的小工具：
 
 ```bash
 si-progress train 0.42 "epoch 3/10"
@@ -105,68 +124,62 @@ si-progress train done
 ```
 </details>
 
-## How It Works
+<details>
+<summary><b>常见问题</b></summary>
+
+- **非交互 shell 里找不到 `squeue`**：App 会自动从 `~/.bashrc` 等文件补全 PATH；还不行就在"连接后先执行"里写 `module load slurm`。
+- **命令跑不通**：每条远程命令都能在设置里修改，"测试连接"会显示原始输出。
+- **没收到提醒**：看诊断日志（设置 → 通用 → 文件与诊断 → 打开诊断日志），每次轮询、每个任务结束、每次提醒发没发都有记录。
+</details>
+
+## 工作原理
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs/architecture-dark.png">
-    <img src="./docs/architecture-light.png" width="860" alt="How ServerIsland works: the Mac polls each server over one SSH channel; the server runs a short read-only bash script and answers with plain-text sections">
+    <source media="(prefers-color-scheme: dark)" srcset="./docs/architecture-zh-dark.png">
+    <img src="./docs/architecture-zh-light.png" width="860" alt="ServerIsland 的工作原理：Mac 每轮通过一个 SSH 通道查看服务器，服务器运行一段只读 bash 脚本，返回分段的纯文本">
   </picture>
 </p>
 
-On macOS and Linux, ServerIsland uses the system `ssh` with a shared connection and `BatchMode=yes`; on Windows it keeps one connection per server with a built-in SSH client that reads your `~/.ssh/config` and `known_hosts`. Either way it never hangs on a password prompt in the background, and it backs off exponentially on errors so it never trips fail2ban. Slurm sees one `squeue -u $USER` per poll and a single `sacct` when a job leaves the queue. Everything stays on your computer — no account, no cloud, no telemetry.
+在 macOS 和 Linux 上，ServerIsland 使用系统自带的 `ssh`，复用同一条连接并开启 `BatchMode=yes`；在 Windows 上，它用内置的 SSH 为每台服务器保持一条连接，读取你的 `~/.ssh/config` 和 `known_hosts`。无论哪种方式，后台都不会卡在等密码上；出错时指数退避，不会触发 fail2ban。对 Slurm 来说，每轮只有一次 `squeue -u $USER`，作业离开队列时再调用一次 `sacct`。一切都留在你的电脑上：没有账号、没有云端、不收集任何数据。
 
-## Screenshots
+## 截图
 
 <table>
   <tr>
-    <td width="50%" align="center"><img src="./docs/screenshots/en/expanded.png" alt="The expanded panel with one card per server"><br><sub><b>Every server at a glance</b> — one card per server; idle ones fold into a line</sub></td>
-    <td width="50%" align="center"><img src="./docs/screenshots/en/alerts.png" alt="A finished alert and a failed alert"><br><sub><b>Alerts</b> — one sound when a job finishes, another when it fails</sub></td>
+    <td width="50%" align="center"><img src="./docs/screenshots/zh/expanded.png" alt="展开的面板，每台服务器一张卡片"><br><sub><b>一眼看完所有服务器</b>：每台一张卡片，空闲的合并成一行</sub></td>
+    <td width="50%" align="center"><img src="./docs/screenshots/zh/alerts.png" alt="完成提醒和失败提醒"><br><sub><b>提醒</b>：完成和失败各有一种提示音</sub></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><img src="./docs/screenshots/en/detail-nep.png" alt="NEP training detail with a live loss curve"><br><sub><b>NEP training</b> — progress, ETA, a live loss curve and the log tail</sub></td>
-    <td width="50%" align="center"><img src="./docs/screenshots/en/detail-vasp-relax.png" alt="VASP relaxation with energy and max-force curves"><br><sub><b>VASP relaxation</b> — energy and max force against your EDIFFG target</sub></td>
+    <td width="50%" align="center"><img src="./docs/screenshots/zh/detail-nep.png" alt="NEP 训练详情和实时 loss 曲线"><br><sub><b>NEP 训练</b>：进度、剩余时间、实时 loss 曲线和日志末尾</sub></td>
+    <td width="50%" align="center"><img src="./docs/screenshots/zh/detail-vasp-relax.png" alt="VASP 结构优化的能量和最大力曲线"><br><sub><b>VASP 结构优化</b>：能量和最大力，虚线是 EDIFFG 目标</sub></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><img src="./docs/screenshots/en/detail-neb.png" alt="VASP NEB energy profile and barrier"><br><sub><b>VASP NEB</b> — the energy profile and how the barrier converges</sub></td>
-    <td width="50%" align="center"><img src="./docs/screenshots/en/partitions.png" alt="Free CPUs and GPUs per Slurm partition"><br><sub><b>Free resources</b> — where can my job start right now?</sub></td>
+    <td width="50%" align="center"><img src="./docs/screenshots/zh/detail-neb.png" alt="VASP NEB 能垒图和能垒收敛"><br><sub><b>VASP NEB</b>：能垒图，以及能垒怎么收敛</sub></td>
+    <td width="50%" align="center"><img src="./docs/screenshots/zh/partitions.png" alt="Slurm 各分区的空闲 CPU 和 GPU"><br><sub><b>分区空闲资源</b>：我的作业现在能在哪儿跑？</sub></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><img src="./docs/screenshots/en/history.png" alt="History of finished jobs with their folders"><br><sub><b>7-day history</b> — finished jobs, exit codes and their folders</sub></td>
-    <td width="50%" align="center"><img src="./docs/screenshots/en/settings-rule-editor.png" alt="Custom progress rule editor with a Test button"><br><sub><b>Custom rules</b> — a file and a keyword, then hit Test</sub></td>
+    <td width="50%" align="center"><img src="./docs/screenshots/zh/history.png" alt="历史记录：结束的作业和工作目录"><br><sub><b>7 天历史</b>：结束的作业、退出码和工作目录</sub></td>
+    <td width="50%" align="center"><img src="./docs/screenshots/zh/settings-rule-editor.png" alt="自定义识别规则和测试按钮"><br><sub><b>自定义规则</b>：填好文件和关键字，点“测试”</sub></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><img src="./docs/screenshots/en/settings-host.png" alt="Server settings: type, connection, jump host and login"><br><sub><b>Any login</b> — key, password, one-time code, jump hosts</sub></td>
-    <td width="50%" align="center"><img src="./docs/screenshots/en/windows-pet.png" alt="Tako on a Windows desktop with the floating panel"><br><sub><b>Windows &amp; Linux</b> — a virtual island, or Tako on your desktop</sub></td>
+    <td width="50%" align="center"><img src="./docs/screenshots/zh/settings-host.png" alt="服务器设置：类型、连接方式、跳板机和认证方式"><br><sub><b>各种登录方式</b>：密钥、密码、动态口令、跳板机</sub></td>
+    <td width="50%" align="center"><img src="./docs/screenshots/zh/windows-pet.png" alt="Windows 桌面上的小章鱼和浮动面板"><br><sub><b>Windows / Linux</b>：虚拟灵动岛，或者桌面小章鱼</sub></td>
   </tr>
 </table>
 
-## Roadmap
+## 参与贡献
 
-- [x] Slurm, direct servers, GPUs, job arrays, pending reasons, partitions
-- [x] NEP / GNEP, GPUMD, VASP and LAMMPS detection, custom rules
-- [x] Loss / energy / max-force curves in job details
-- [x] PBS (PBS Pro / OpenPBS / Torque), folder filters, log retention
-- [x] Windows and Linux versions
-- [x] Display selection on multi-monitor setups
-- [x] One-click updates, server reordering, a terminal button on each card
-- [x] Starred jobs, an all-jobs page, quiet hours, settings import / export, TorchNEP and MACE
-- [x] Phone push (WeCom / WeChat), cost estimates, DeePMD-kit
-- [ ] More packages: CP2K, Quantum ESPRESSO, ABACUS, Gaussian, ORCA
-- [ ] LSF
+欢迎提 Bug、提想法、发 Pull Request，中英文都可以，见 [CONTRIBUTING.md](./CONTRIBUTING.md)（从源码构建的方法也在那里）。开发文档（[`AGENTS.md`](./AGENTS.md)、[`references/`](./references/)）介绍了架构、远端脚本协议，以及怎样新增一种计算软件。如果 ServerIsland 每天帮你省下几次 `ssh`，点个 ⭐ 能让更多人看到它。
 
-## Contributing
+## 联系
 
-Bug reports, ideas and pull requests are welcome, in English or Chinese — see [CONTRIBUTING.md](./CONTRIBUTING.md), which also explains how to build from source. The developer docs ([`AGENTS.md`](./AGENTS.md), [`references/`](./references/)) cover the architecture, the remote script protocol and how to add a new simulation package. If ServerIsland saves you a few `ssh` round-trips a day, a ⭐ helps others find it.
+有问题、反馈或想法？欢迎[提 Issue](https://github.com/zhyan0603/ServerIsland/issues)，这样其他人也能看到答案；也可以发邮件给 **Zihan Yan**：[yanzihan@westlake.edu.cn](mailto:yanzihan@westlake.edu.cn)。
 
-## Contact
+## 致谢
 
-Questions, feedback or ideas? Please [open an issue](https://github.com/zhyan0603/ServerIsland/issues) so others can find the answer too, or email **Zihan Yan** at [yanzihan@westlake.edu.cn](mailto:yanzihan@westlake.edu.cn).
+刘海交互参考了 [Pulse](https://github.com/jsattler/Pulse)、[claude-island](https://github.com/farouqaldori/claude-island)、[open-vibe-island](https://github.com/Octane0411/open-vibe-island)、[boring.notch](https://github.com/TheBoredTeam/boring.notch)；免装 agent 的 SSH 监控参考了 [VRAMRadar](https://github.com/XinbaoQiao/VRAMRadar)、[NVBeacon](https://github.com/jaein4722/NVBeacon)、[RemoteGPU-Bar](https://github.com/ZeyuuuChen/RemoteGPU-Bar)。NEP / GPUMD 的进度判断参考了 [GPUMDkit](https://github.com/zhyan0603/GPUMDkit)。
 
-## Acknowledgements
+## 许可证
 
-Notch interaction inspired by [Pulse](https://github.com/jsattler/Pulse), [claude-island](https://github.com/farouqaldori/claude-island), [open-vibe-island](https://github.com/Octane0411/open-vibe-island) and [boring.notch](https://github.com/TheBoredTeam/boring.notch). Agent-free SSH monitoring ideas from [VRAMRadar](https://github.com/XinbaoQiao/VRAMRadar), [NVBeacon](https://github.com/jaein4722/NVBeacon) and [RemoteGPU-Bar](https://github.com/ZeyuuuChen/RemoteGPU-Bar). NEP / GPUMD progress logic follows [GPUMDkit](https://github.com/zhyan0603/GPUMDkit).
-
-## License
-
-Copyright © 2026 Zihan Yan and ServerIsland contributors. ServerIsland is free software released under the [GNU General Public License v3.0](./LICENSE): you may use, modify and redistribute it, and any modified version you distribute must also be open source under the GPL.
+Copyright © 2026 Zihan Yan and ServerIsland contributors. ServerIsland 是自由软件，按 [GNU 通用公共许可证第 3 版（GPL-3.0）](./LICENSE) 发布：你可以自由使用、修改和再分发；分发修改后的版本时，也必须以 GPL 公开全部源码。

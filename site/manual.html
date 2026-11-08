@@ -30,6 +30,7 @@
   <nav class="nav-links">
     <a href="index.html#features"><span lang="zh">功能</span><span lang="en">Features</span></a>
     <a href="index.html#apps"><span lang="zh">计算软件</span><span lang="en">Software</span></a>
+    <a href="index.html#display"><span lang="zh">桌面副屏</span><span lang="en">Display</span></a>
     <a class="current" href="manual.html"><span lang="zh">使用手册</span><span lang="en">Guide</span></a>
     <a href="index.html#opensource"><span lang="zh">开源</span><span lang="en">Open source</span></a>
   </nav>
@@ -66,6 +67,7 @@
     <a href="#billing"><span lang="zh">估算费用</span><span lang="en">Cost estimates</span></a>
     <a href="#login"><span lang="zh">登录方式与跳板机</span><span lang="en">Logins &amp; jump hosts</span></a>
     <a href="#progress"><span lang="zh">计算进度</span><span lang="en">Progress</span></a>
+    <a href="#display"><span lang="zh">桌面副屏</span><span lang="en">Desk display</span></a>
     <a href="#winlinux"><span lang="zh">Windows 与 Linux</span><span lang="en">Windows &amp; Linux</span></a>
     <a href="#faq"><span lang="zh">常见问题</span><span lang="en">FAQ</span></a>
     <a href="#files"><span lang="zh">文件位置</span><span lang="en">Files</span></a>
@@ -316,6 +318,31 @@ GNEP 训练：200/200 epoch · loss 1.23e-2
       </ul>
       <pre><code>{"name": "train", "progress": 0.42, "message": "epoch 3/10", "jobid": "12345"}</code></pre>
       <p><span lang="zh">各软件具体怎么识别，见<a href="features.html#software">功能详解</a>。</span><span lang="en">How each package is detected is covered in the <a href="features.html#software">feature tour</a>.</span></p>
+    </section>
+
+    <!-- 桌面副屏 -->
+    <section id="display">
+      <h2><span lang="zh">桌面副屏</span><span lang="en">Desk display</span></h2>
+      <p><span lang="zh">ServerIsland 桌面副屏是一块 2.16 寸的 AMOLED 触摸小屏，放在电脑旁边显示任务进度、服务器资源、AI 用量、Claude Code / Codex / OpenCode 的状态和提醒。副屏只从电脑拿数据，服务器上不用装任何东西。在哪里买见<a href="index.html#display">首页</a>（闲鱼）。</span>
+         <span lang="en">The ServerIsland Display is a 2.16-inch AMOLED touch screen that sits next to your computer and shows job progress, server resources, AI usage, Claude Code / Codex / OpenCode status and alerts. It only talks to your computer — nothing is installed on your servers. See the <a href="index.html#display">home page</a> for where to get one (Xianyu).</span></p>
+      <ol>
+        <li><span lang="zh">设置 → 通用 → 扩展 → 打开<b>外接副屏（ESP32）</b>，侧栏会多出一个"副屏"页。</span>
+            <span lang="en">Settings → General → Extensions → turn on <b>External Display (ESP32)</b>; a Display page appears in the sidebar.</span></li>
+        <li><span lang="zh">用 USB-C 线把副屏插到电脑上，几秒内自动连接，副屏页显示"已连接"。</span>
+            <span lang="en">Plug the display in with a USB-C cable; it connects within a few seconds and the Display page says Connected.</span></li>
+        <li><span lang="zh">想拔掉线用：在副屏页打开<b>也通过蓝牙连接</b>（Mac 和 Windows），按提示配对；插着 USB 时仍然优先用 USB。Linux 目前只支持 USB。</span>
+            <span lang="en">To go wireless, turn on <b>Also Connect over Bluetooth</b> on the Display page (Mac and Windows) and follow the pairing prompt; USB is still preferred while plugged in. Linux is USB only for now.</span></li>
+      </ol>
+      <ul>
+        <li><span lang="zh"><b>副屏上的设置</b>：表盘、屏幕方向、亮度、夜间熄屏、提示音都能在副屏页里改，改了直接同步到副屏；也可以在副屏上自己改。</span>
+            <span lang="en"><b>On the display</b>: face, orientation, brightness, night hours and sounds can be changed on the Display page and sync straight to the board — or change them on the display itself.</span></li>
+        <li><span lang="zh"><b>Agent 提醒</b>：在副屏页给 Claude Code 装上钩子、给 OpenCode 装上插件（一键安装，原来的配置会保留并备份）；Codex 不用装。对话需要你确认、回答完了时副屏会"叮咚"一声。</span>
+            <span lang="en"><b>Agent alerts</b>: install the Claude Code hooks and the OpenCode plugin from the Display page (one click; your existing configuration is kept and backed up); Codex needs nothing. The display chimes when a session needs your OK or has finished.</span></li>
+        <li><span lang="zh"><b>AI 用量</b>：电脑上装了 CC Switch 时自动显示今天、7 天、30 天的 Token 和费用（只在本机读取）。</span>
+            <span lang="en"><b>AI usage</b>: with CC Switch installed on your computer, today's, 7-day and 30-day tokens and costs show up automatically (read locally only).</span></li>
+        <li><span lang="zh"><b>日程和天气</b>：可以填截止日期倒计时和天气城市；Mac 版还能显示系统日历里的日程。</span>
+            <span lang="en"><b>Calendar and weather</b>: add deadline countdowns and a weather city; the Mac version can also show events from your system calendar.</span></li>
+      </ul>
     </section>
 
     <!-- Windows / Linux -->
