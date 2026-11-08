@@ -18,7 +18,7 @@
     })();
   </script>
   <link rel="icon" type="image/png" href="assets/favicon.png">
-  <link rel="stylesheet" href="css/style.css?v=20261021a">
+  <link rel="stylesheet" href="css/style.css?v=20261108a">
 </head>
 <body data-title-zh="功能详解 — ServerIsland" data-title-en="Feature Tour — ServerIsland">
 
@@ -61,7 +61,9 @@
     <a href="#software"><span lang="zh">计算软件识别</span><span lang="en">Simulation software</span></a>
     <a class="sub" href="#rules"><span lang="zh">自定义规则</span><span lang="en">Custom rules</span></a>
     <a href="#alerts"><span lang="zh">提醒</span><span lang="en">Alerts</span></a>
+    <a class="sub" href="#push"><span lang="zh">推送到手机</span><span lang="en">Phone push</span></a>
     <a href="#details"><span lang="zh">详情、日志、取消</span><span lang="en">Details &amp; cancel</span></a>
+    <a href="#billing"><span lang="zh">估算费用</span><span lang="en">Cost estimates</span></a>
     <a href="#control"><span lang="zh">每台服务器的设置</span><span lang="en">Per-server control</span></a>
     <a href="#tako"><span lang="zh">Tako</span><span lang="en">Tako</span></a>
     <a href="#platforms"><span lang="zh">三个平台</span><span lang="en">Platforms</span></a>
@@ -74,9 +76,11 @@
       <h2><span lang="zh">一览</span><span lang="en">At a glance</span></h2>
       <div class="feat-grid">
         <div class="feat"><b><span lang="zh">每台服务器一张卡片</span><span lang="en">One card per server</span></b><p><span lang="zh">运行 / 排队数量、CPU、内存、GPU、磁盘，空闲的机器自动合并成一行。</span><span lang="en">Running / pending counts, CPU, memory, GPUs and disks; idle servers fold into one line.</span></p></div>
-        <div class="feat"><b><span lang="zh">真实的计算进度</span><span lang="en">Real progress</span></b><p><span lang="zh">NEP、GPUMD、VASP、LAMMPS 自动识别，显示进度、速度、预计剩余时间和曲线。</span><span lang="en">NEP, GPUMD, VASP and LAMMPS are recognised automatically, with progress, speed, ETA and curves.</span></p></div>
+        <div class="feat"><b><span lang="zh">真实的计算进度</span><span lang="en">Real progress</span></b><p><span lang="zh">NEP、TorchNEP、MACE、DeePMD-kit、GPUMD、VASP、LAMMPS 自动识别，显示进度、速度、预计剩余时间和曲线。</span><span lang="en">NEP, TorchNEP, MACE, DeePMD-kit, GPUMD, VASP and LAMMPS are recognised automatically, with progress, speed, ETA and curves.</span></p></div>
         <div class="feat"><b><span lang="zh">听得见的提醒</span><span lang="en">Alerts you can hear</span></b><p><span lang="zh">完成和失败不同的提示音；没有作业记录的集群也能判断是正常结束还是提前退出。</span><span lang="en">Different sounds for success and failure; it can tell a clean finish from an early exit even without job accounting.</span></p></div>
         <div class="feat"><b><span lang="zh">安全，轻量</span><span lang="en">Safe and light</span></b><p><span lang="zh">服务器上什么都不装，每次刷新一个 SSH 通道；取消任务要三道确认；密码默认不保存。</span><span lang="en">Nothing installed on servers, one SSH channel per refresh, a three-step cancel, passwords not stored by default.</span></p></div>
+        <div class="feat"><b><span lang="zh">离开电脑也知道</span><span lang="en">Away from your desk</span></b><p><span lang="zh">给重要的任务点个 ☆，结束或失败时推送到手机的企业微信 / 微信。</span><span lang="en">Star the jobs that matter and get a WeCom / WeChat message on your phone when they finish or fail.</span></p></div>
+        <div class="feat"><b><span lang="zh">花了多少钱</span><span lang="en">What it cost</span></b><p><span lang="zh">按分区填单价，按调度系统分配的资源估算每个作业、每天、每月的费用。</span><span lang="en">Set a price per partition and see estimated costs per job, per day and per month from what the scheduler allocated.</span></p></div>
       </div>
       <figure class="shot"><img data-shot="expanded" alt="Expanded panel with a Slurm cluster and a GPU workstation" loading="lazy"></figure>
     </section>
@@ -96,11 +100,16 @@
             <span lang="en"><b>Last 24 hours</b>: the full record from <code>sacct</code> when available (array elements merged), otherwise what ServerIsland saw itself.</span></li>
         <li><span lang="zh"><b>PBS 也一样</b>：PBS Pro、OpenPBS 和 Torque 用 <code>qselect</code> + <code>qstat -f</code> 读取，数组作业、排队原因（来自 comment）、结束状态（<code>qstat -x</code>）、按住取消（<code>qdel</code>）都有；分区空闲资源只有 Slurm 才有。</span>
             <span lang="en"><b>PBS too</b>: PBS Pro, OpenPBS and Torque are read with <code>qselect</code> + <code>qstat -f</code> — arrays, pending reasons (from the comment), final states (<code>qstat -x</code>) and hold-to-cancel (<code>qdel</code>) all work; free partition resources are Slurm only.</span></li>
+        <li><span lang="zh"><b>关注重要的任务</b>：任务行上悬停时点 ☆（或右键、详情页的星标），关注的任务排在最前面，重启后还在，结束后自动取消关注；数组作业按整个数组关注。提醒和手机推送都可以设成"只提醒关注的任务"。</span>
+            <span lang="en"><b>Star the jobs that matter</b>: click the ☆ that appears on hover (or use the right-click menu or the star on the details page). Starred jobs stay on top, survive restarts and are unstarred when they end; arrays are starred as a whole. Alerts and phone push can be limited to starred jobs.</span></li>
+        <li><span lang="zh"><b>全部任务</b>：刘海顶部的列表按钮把所有服务器的任务放在一页——按名称、作业号、目录或服务器搜索，按状态、服务器或"只看关注"筛选。</span>
+            <span lang="en"><b>All jobs on one page</b>: the list button at the top of the island shows every server's jobs together — search by name, ID, folder or server, and filter by status, server or starred only.</span></li>
         <li><span lang="zh"><b>只看某些目录</b>：每台服务器可以只显示工作目录在指定文件夹里的作业和进程，比如只看 <code>~/projects/LLZO</code>。</span>
             <span lang="en"><b>Only some folders</b>: limit a server to jobs and processes whose working directory is inside given folders, e.g. just <code>~/projects/LLZO</code>.</span></li>
         <li><span lang="zh"><b>单机 Slurm 工作站</b>：可以同时显示作业和直接运行的程序，属于作业的进程不会重复列出。</span>
             <span lang="en"><b>Single-machine Slurm</b>: show jobs and directly started programs together; processes that belong to a job aren't listed twice.</span></li>
       </ul>
+      <figure class="shot"><img data-shot="jobs-starred" alt="All jobs across servers, filtered to starred jobs" loading="lazy"></figure>
       <figure class="shot"><img data-shot="partitions" alt="Free resources per Slurm partition" loading="lazy"></figure>
     </section>
 
@@ -125,6 +134,9 @@
       <table>
         <tr><th><span lang="zh">软件</span><span lang="en">Software</span></th><th><span lang="zh">识别依据</span><span lang="en">Detected from</span></th><th><span lang="zh">显示</span><span lang="en">Shows</span></th></tr>
         <tr><td>NEP / GNEP</td><td><code>loss.out</code> + <code>nep.in</code> / <code>gnep.in</code></td><td><span lang="zh">代数 / epoch、各项 loss、速度、预计剩余；详情页有 loss 曲线（对数坐标，增量读取）</span><span lang="en">generation / epoch, losses, speed, ETA; a log-scale loss curve, read incrementally</span></td></tr>
+        <tr><td>TorchNEP</td><td><span lang="zh">表头是 <code># epoch  loss  rmse_e…</code> 的 <code>loss.out</code>（目录本身或 <code>output/</code>）</span><span lang="en"><code>loss.out</code> with a <code># epoch  loss  rmse_e…</code> header (in the folder or <code>output/</code>)</span></td><td><span lang="zh">epoch、各项误差、速度、预计剩余；详情页有误差曲线</span><span lang="en">epochs, errors, speed, ETA; error curves on the details page</span></td></tr>
+        <tr><td>MACE</td><td><code>logs/*.log</code><span lang="zh">（开头有 <code>MACE version</code>）</span><span lang="en"> (with <code>MACE version</code> near the top)</span></td><td><span lang="zh">epoch / <code>max_num_epochs</code>、验证集误差和曲线</span><span lang="en">epoch / <code>max_num_epochs</code>, validation errors and curves</span></td></tr>
+        <tr><td>DeePMD-kit</td><td><code>lcurve.out</code> + <span lang="zh">日志 / <code>input.json</code></span><span lang="en">log / <code>input.json</code></span></td><td><span lang="zh">步数（目标来自日志里的 "Start to train N steps"，所以 <code>num_epochs</code> 也能用，其次是 <code>numb_steps</code>）、能量 / 力误差；详情页有 E / F / V 曲线。TensorFlow 和 PyTorch 后端都支持</span><span lang="en">steps (target from "Start to train N steps" in the log, so <code>num_epochs</code> works, else <code>numb_steps</code>), energy / force errors; E / F / V curves on the details page. TensorFlow and PyTorch backends</span></td></tr>
         <tr><td>GPUMD</td><td><code>run.in</code> + <code>neighbor.out</code> / <code>thermo.out</code></td><td><span lang="zh">步数（目标是 run.in 里所有 run 之和）、速度、近邻数</span><span lang="en">steps (target = sum of all runs in run.in), speed, neighbour counts</span></td></tr>
         <tr><td>VASP</td><td><code>INCAR</code> + <code>OSZICAR</code> + <code>OUTCAR</code></td><td><span lang="zh">MD：离子步 / NSW 的百分比；结构优化：离子步，以及并排的能量曲线和最大力曲线（读 OUTCAR，虚线是 EDIFFG 目标）；单点：电子步。OUTCAR 里出现计时信息算正常结束</span><span lang="en">MD: ionic steps as a share of NSW; relaxation: ionic steps plus side-by-side energy and max-force curves (from OUTCAR, with the EDIFFG target as a dashed line); SCF: electronic steps. The timing block in OUTCAR marks a clean finish</span></td></tr>
         <tr><td>LAMMPS</td><td><code>log.lammps</code></td><td><span lang="zh">最后一段 <code>run</code> 的步数和速度；出现 <code>Total wall time</code> 算正常结束。minimize 等少见写法不显示</span><span lang="en">steps and speed of the last <code>run</code>; <code>Total wall time</code> marks a clean finish. minimize and other unusual setups are skipped</span></td></tr>
@@ -150,8 +162,25 @@
         <div class="feat"><b><span lang="zh">不靠猜</span><span lang="en">No guessing</span></b><p><span lang="zh">先问 <code>sacct</code>；没有作业记录就看计算软件的输出；都没有就只说"已离开队列"。</span><span lang="en"><code>sacct</code> first; without accounting, the software's own output; otherwise just "left the queue".</span></p></div>
         <div class="feat"><b><span lang="zh">数组作业</span><span lang="en">Job arrays</span></b><p><span lang="zh">全部结束时汇总一次（成功几个、失败几个）；可选第一个元素失败时立即提醒。</span><span lang="en">One summary when the whole array ends (how many succeeded / failed); optionally an early alert on the first failure.</span></p></div>
         <div class="feat"><b><span lang="zh">安静的时候</span><span lang="en">Quiet when you want</span></b><p><span lang="zh">每台服务器可以静音；短于 30 秒的进程不打扰；提示音可以调音量或关掉。</span><span lang="en">Mute per server; processes shorter than 30 s never alert; sounds have a volume and an off switch.</span></p></div>
+        <div class="feat"><b><span lang="zh">只提醒你关心的</span><span lang="en">Only what you care about</span></b><p><span lang="zh">可以只提醒关注的任务，开始运行、完成、失败、结果未知四类分别开关。</span><span lang="en">Alert for starred jobs only, and switch Started, Finished, Failed and Unknown on or off separately.</span></p></div>
+        <div class="feat"><b><span lang="zh">勿扰时段</span><span lang="en">Quiet hours</span></b><p><span lang="zh">比如 23:00–08:00 不响铃、不弹窗，系统通知照发但不出声。</span><span lang="en">For example 23:00–08:00: no sounds or pop-ups; system notifications still arrive silently.</span></p></div>
       </div>
       <figure class="shot"><img data-shot="toast-failed" alt="Failed alert" loading="lazy"></figure>
+
+      <h3 id="push"><span lang="zh">推送到手机</span><span lang="en">Phone push</span></h3>
+      <p><span lang="zh">在 设置 → 手机推送 里粘贴企业微信群机器人的 Webhook 地址，任务结束、失败时由电脑发一条消息到群里，手机上的企业微信（开了"微信插件"的话普通微信也行）就会收到。手机不连服务器、不耗电；电脑睡眠时不推送。</span>
+         <span lang="en">Paste a WeCom group bot's webhook under Settings → Phone Push and your computer posts a message when jobs finish or fail; your phone gets it in WeCom (or in WeChat, with WeCom's WeChat plugin). The phone never connects to your servers and uses no battery for it; nothing is sent while the computer sleeps.</span></p>
+      <ul>
+        <li><span lang="zh"><b>默认只推送关注的任务</b>：平时人在电脑前看刘海就够了，要离开、或者有重要的任务时点个 ☆。也可以推送全部任务，或者和刘海提醒一样；完成、失败、结果未知、开始运行、磁盘警告、Claude Code / Codex / OpenCode 的 Agent 提醒都能单独开关。</span>
+            <span lang="en"><b>Starred jobs only by default</b>: at your desk the island is enough; star the jobs you care about before you step away. You can also push all jobs or follow the island's alert settings, and switch finished, failed, unknown, started, disk warnings and Claude Code / Codex / OpenCode agent alerts on or off.</span></li>
+        <li><span lang="zh"><b>详细的消息</b>：作业号、分区、资源、用时和时间上限、起止时间、失败原因（如 <code>OUT_OF_MEMORY</code>、退出码）、计算软件进度、目录（只显示最后两层，不带用户名）、费用。也可以选"简洁"，只有标题和服务器。消息里没有用户名、主机地址和日志。</span>
+            <span lang="en"><b>Detailed messages</b>: job ID, partition, resources, run time against the limit, start and end times, the failure reason (such as <code>OUT_OF_MEMORY</code> and the exit code), app progress, the folder (last two levels, no username) and the cost. "Brief" keeps just the title and server. Messages never include usernames, host addresses or logs.</span></li>
+        <li><span lang="zh"><b>不刷屏</b>：10 秒内的多条提醒合并成一条，每分钟最多 15 条；勿扰时段不推送（可以让失败的照常推送）；静音的服务器不推送。</span>
+            <span lang="en"><b>No flood</b>: alerts within 10 seconds are merged into one message, at most 15 a minute; quiet hours are respected (failures can still go through); muted servers never push.</span></li>
+        <li><span lang="zh"><b>key 只存在系统钥匙串 / 凭据库里</b>，不写进配置文件和日志。</span>
+            <span lang="en"><b>The key lives only in the system keychain / credential store</b>, never in the settings file or logs.</span></li>
+      </ul>
+      <figure class="shot narrow"><img data-shot="settings-push" alt="Phone push settings" loading="lazy"></figure>
     </section>
 
     <section id="details">
@@ -167,6 +196,15 @@
             <span lang="en"><b>Cancel</b>: off by default, enabled per server; hold 1.5 s → confirm (the exact command is shown) → the server re-checks name, owner and start time and refuses on any mismatch. Processes get TERM first, with a force-kill if they don't exit.</span></li>
       </ul>
       <figure class="shot"><img data-shot="detail-vasp" alt="VASP relaxation detail with energy curve" loading="lazy"></figure>
+    </section>
+
+    <section id="billing">
+      <h2><span lang="zh">估算费用</span><span lang="en">Cost estimates</span></h2>
+      <p><span lang="zh">设置 → 计费（默认关）：给每台 Slurm / PBS 服务器的分区填单价（按卡时、核时或节点时，可以从服务器读取分区列表），ServerIsland 按调度系统分配给作业的资源 × 运行时长估算花了多少钱。刘海顶部的钱币按钮打开费用页：今天、本月、上月、正在跑的任务每小时多少钱、本月每天的花费、按服务器和分区汇总、本月最贵的作业；作业详情和历史记录里也有费用。</span>
+         <span lang="en">Settings → Billing (off by default): set a price per GPU-hour, core-hour or node-hour for each Slurm / PBS partition (or read the partitions from the server), and ServerIsland estimates each job's cost from the resources the scheduler allocated × run time. The coin button at the top of the island opens the Costs page — today, this month, last month, what running jobs cost per hour, a day-by-day chart, totals per server and partition, and the most expensive jobs; job details and History show costs too.</span></p>
+      <p><span lang="zh">每个运行中的作业只多查一次分到的资源；关掉计费时服务器上什么都不变。结果是估算，以计算中心的账单为准。</span>
+         <span lang="en">Each running job's allocation is queried once; with billing off nothing changes on your servers. These are estimates — your provider's bill is what counts.</span></p>
+      <figure class="shot"><img data-shot="costs" alt="Costs page" loading="lazy"></figure>
     </section>
 
     <section id="control">
@@ -204,7 +242,7 @@
         <tr><th></th><th>macOS</th><th>Windows</th><th>Linux</th></tr>
         <tr><td><span lang="zh">显示</span><span lang="en">Display</span></td><td><span lang="zh">贴着刘海的灵动岛</span><span lang="en">Island around the notch</span></td><td colspan="2"><span lang="zh">屏幕顶部的灵动岛，或桌面小章鱼（可拖动）；托盘图标</span><span lang="en">Island at the top of the screen or a draggable desktop pet; tray icon</span></td></tr>
         <tr><td>SSH</td><td><span lang="zh">系统 ssh，复用连接</span><span lang="en">System ssh, shared connection</span></td><td><span lang="zh">内置 SSH（读取 .ssh\config 和 known_hosts），也可以改用系统 ssh</span><span lang="en">Built-in SSH (reads .ssh\config and known_hosts), or the system ssh</span></td><td><span lang="zh">系统 ssh，复用连接</span><span lang="en">System ssh, shared connection</span></td></tr>
-        <tr><td><span lang="zh">提醒</span><span lang="en">Alerts</span></td><td><span lang="zh">弹窗、提示音、系统通知</span><span lang="en">Pop-up, sounds, notifications</span></td><td><span lang="zh">弹窗、提示音</span><span lang="en">Pop-up, sounds</span></td><td><span lang="zh">弹窗、提示音、系统通知</span><span lang="en">Pop-up, sounds, notifications</span></td></tr>
+        <tr><td><span lang="zh">提醒</span><span lang="en">Alerts</span></td><td><span lang="zh">弹窗、提示音、系统通知、手机推送</span><span lang="en">Pop-up, sounds, notifications, phone push</span></td><td><span lang="zh">弹窗、提示音、手机推送</span><span lang="en">Pop-up, sounds, phone push</span></td><td><span lang="zh">弹窗、提示音、系统通知、手机推送</span><span lang="en">Pop-up, sounds, notifications, phone push</span></td></tr>
         <tr><td><span lang="zh">配置</span><span lang="en">Settings file</span></td><td colspan="3"><span lang="zh">同一种格式，可以互相拷贝</span><span lang="en">Same format everywhere — copy it across</span></td></tr>
       </table>
       <figure class="shot narrow"><img data-shot="cross-pet" alt="Desktop pet mode on Windows / Linux" loading="lazy"></figure>
@@ -236,9 +274,9 @@
   </span>
 </footer>
 
-<script src="js/config.js?v=20261021a"></script>
-<script src="js/tako.js?v=20261021a"></script>
-<script src="js/main.js?v=20261021a"></script>
+<script src="js/config.js?v=20261108a"></script>
+<script src="js/tako.js?v=20261108a"></script>
+<script src="js/main.js?v=20261108a"></script>
 <script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
 </body>
 </html>

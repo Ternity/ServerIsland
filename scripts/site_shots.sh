@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 swift build 2>&1 | grep -v PlatformPath | tail -1
 TMP=$(mktemp -d)
-SHOTS="expanded collapsed toast toast-failed detail-nep detail-vasp detail-confirm partitions history settings-rules settings-rule-editor expanded-idle"
+SHOTS="expanded collapsed toast toast-failed detail-nep detail-vasp detail-confirm partitions history settings-rules settings-rule-editor expanded-idle costs jobs-starred settings-push"
 for l in zh en; do
   .build/debug/ServerIsland --render-preview "$TMP/$l" "$l" > /dev/null
   mkdir -p "site/assets/shots/$l"

@@ -18,7 +18,7 @@
     })();
   </script>
   <link rel="icon" type="image/png" href="assets/favicon.png">
-  <link rel="stylesheet" href="css/style.css?v=20261021a">
+  <link rel="stylesheet" href="css/style.css?v=20261108a">
 </head>
 <body data-title-zh="使用手册 — ServerIsland" data-title-en="Guide — ServerIsland">
 
@@ -62,6 +62,8 @@
     <a href="#panel"><span lang="zh">认识面板</span><span lang="en">The panel</span></a>
     <a href="#details"><span lang="zh">任务详情与取消</span><span lang="en">Job details</span></a>
     <a href="#alerts"><span lang="zh">提醒与提示音</span><span lang="en">Alerts</span></a>
+    <a href="#push"><span lang="zh">推送到手机</span><span lang="en">Phone push</span></a>
+    <a href="#billing"><span lang="zh">估算费用</span><span lang="en">Cost estimates</span></a>
     <a href="#login"><span lang="zh">登录方式与跳板机</span><span lang="en">Logins &amp; jump hosts</span></a>
     <a href="#progress"><span lang="zh">计算进度</span><span lang="en">Progress</span></a>
     <a href="#winlinux"><span lang="zh">Windows 与 Linux</span><span lang="en">Windows &amp; Linux</span></a>
@@ -204,9 +206,73 @@
             <span lang="en"><b>Success or failure</b>: Slurm jobs use <code>sacct</code>; without job accounting, the software's own output tells a clean finish from an early exit; if neither is available it just says "left the queue" — no guessing.</span></li>
         <li><span lang="zh"><b>提示音</b>：成功和失败是两种声音，可以在 设置 → 通用 → 提示音 里试听、调音量或关掉。</span>
             <span lang="en"><b>Sounds</b>: success and failure sound different; preview, adjust or turn them off in Settings → General → Sounds.</span></li>
+        <li><span lang="zh"><b>只提醒重要的任务</b>：在任务行上悬停时点 ☆ 关注它（也可以右键，或在详情页点星标），再到 设置 → 通用 → 提醒 把"提醒哪些任务"改成"只提醒关注的任务"。关注的任务排在最前面，结束后自动取消关注。开始运行、完成、失败、结果未知四类提醒也可以分别关掉。</span>
+            <span lang="en"><b>Only the jobs that matter</b>: hover a job row and click ☆ to star it (or use the right-click menu or the star on its details page), then set Settings → General → Alerts → Alert For to "Starred Jobs Only". Starred jobs stay on top and are unstarred when they end. Started, Finished, Failed and Unknown alerts can each be turned off.</span></li>
+        <li><span lang="zh"><b>勿扰时段</b>：设置 → 通用 → 提醒 → 勿扰时段（默认关），这段时间里不响铃、不弹窗，系统通知照发但不出声。</span>
+            <span lang="en"><b>Quiet hours</b>: Settings → General → Alerts → Quiet Hours (off by default) — no sounds or pop-ups during those hours; system notifications still arrive silently.</span></li>
         <li><span lang="zh"><b>不想被打扰</b>：点卡片上的 🔔 静音这台服务器，或者 ⏸ 暂停它的自动刷新。</span>
             <span lang="en"><b>Too chatty?</b> Mute a server with 🔔 on its card, or pause its auto refresh with ⏸.</span></li>
       </ul>
+    </section>
+
+    <!-- 手机推送 -->
+    <section id="push">
+      <h2><span lang="zh">推送到手机</span><span lang="en">Phone push</span></h2>
+      <p><span lang="zh">离开电脑时也想知道任务跑完没有？ServerIsland 可以在任务结束、失败时，往企业微信群里发一条消息，手机上的企业微信就会响。开了企业微信的"微信插件"后，普通微信里也能收到。消息由电脑发出，手机不连服务器；电脑睡眠时不会推送。</span>
+         <span lang="en">Want to know your jobs are done when you're away? ServerIsland can post to a WeCom group when jobs finish or fail, so WeCom on your phone pings you — or WeChat, with WeCom's WeChat plugin. Messages come from your computer and your phone never connects to the servers; nothing is sent while the computer sleeps.</span></p>
+      <h3><span lang="zh">1. 创建群机器人</span><span lang="en">1. Create a group bot</span></h3>
+      <ol>
+        <li><span lang="zh">手机上安装<b>企业微信</b>，用微信登录，选"创建企业"，类型选"团队"或"其他"，名字随便填。个人就能免费创建，不需要营业执照或认证。</span>
+            <span lang="en">Install <b>WeCom</b> on your phone, sign in with WeChat and choose "Create a company" → Team / Other, with any name. It's free for individuals — no business licence or verification.</span></li>
+        <li><span lang="zh">消息 → 右上角 ＋ → 发起群聊。企业微信的内部群一般至少要 3 个人才能建：可以先邀请两位家人或同学加入，建好群、加完机器人后再把他们移出群。</span>
+            <span lang="en">Messages → ＋ → New group chat. Internal groups usually need at least three people: invite two friends or family members, create the group and the bot, then remove them.</span></li>
+        <li><span lang="zh">进群 → 右上角 ··· → <b>群机器人</b> → 添加 → 新创建一个机器人，复制它的 <b>Webhook 地址</b>。这个地址就像密码，拿到的人都能往群里发消息，不要发给别人。</span>
+            <span lang="en">In the group → ··· → <b>Group Bots</b> → Add → create a bot and copy its <b>webhook URL</b>. Treat it like a password: anyone with it can post to your group.</span></li>
+        <li><span lang="zh">（可选）想在普通微信里收：电脑上打开企业微信管理后台 → 我的企业 → <b>微信插件</b>，用微信扫"邀请关注"的二维码。微信里只能显示纯文本，ServerIsland 发的正好是纯文本。</span>
+            <span lang="en">(Optional) To get messages in WeChat: on a computer open the WeCom admin console → My Company → <b>WeChat Plugin</b> and scan the follow code with WeChat. WeChat only shows plain text, which is what ServerIsland sends.</span></li>
+      </ol>
+      <h3><span lang="zh">2. 在 ServerIsland 里填上</span><span lang="en">2. Add it to ServerIsland</span></h3>
+      <p><span lang="zh">设置 → <b>手机推送</b>，把 Webhook 地址粘贴进去（整个地址或只粘 key 都行），点"保存"，再点"发送测试消息"，手机上收到就说明好了。key 只存在系统钥匙串 / Windows 凭据管理器 / Linux 钥匙圈里，不写进配置文件和日志。</span>
+         <span lang="en">Open Settings → <b>Phone Push</b>, paste the webhook URL (or just its key), click Save, then "Send Test Message". If it arrives on your phone, you're set. The key is kept only in the macOS Keychain / Windows Credential Manager / Linux keyring, never in the settings file or logs.</span></p>
+      <figure class="shot narrow"><img data-shot="settings-push" alt="Phone push settings" loading="lazy"></figure>
+      <h3><span lang="zh">3. 推送哪些任务</span><span lang="en">3. Choose what gets pushed</span></h3>
+      <ul>
+        <li><span lang="zh"><b>默认只推送关注（⭐）的任务</b>。平时人在电脑前看刘海就够了；要离开、或者有一个重要的任务时，给它点个 ☆，结束时手机就会收到。也可以改成"全部任务"或"和刘海提醒一样"。手动监听的进程总是推送。</span>
+            <span lang="en"><b>Only starred jobs by default.</b> At your desk the island is enough; before you leave, or for one important job, star it and your phone hears when it ends. You can switch to "All Jobs" or "Same as Island Alerts". Watched processes always push.</span></li>
+        <li><span lang="zh"><b>事件</b>：完成、失败、结果未知默认开，开始运行默认关；磁盘快满等服务器警告默认开；Claude Code / Codex / OpenCode 的"需要你确认 / 回答完了"默认关（Claude Code 和 OpenCode 需要在同一页装一下钩子）。</span>
+            <span lang="en"><b>Events</b>: Finished, Failed and Unknown are on, Started is off; server warnings such as a nearly full disk are on; Claude Code / Codex / OpenCode "needs you / done" alerts are off (Claude Code and OpenCode need the hooks on the same page).</span></li>
+        <li><span lang="zh"><b>消息内容</b>："详细"包括作业号、分区、资源、用时和时间上限、起止时间、失败原因、计算软件进度、目录（只显示最后两层，不带用户名）、费用（打开计费时）；"简洁"只有标题和服务器。不会发送用户名、主机地址和日志。</span>
+            <span lang="en"><b>Message</b>: "Detailed" includes the job ID, partition, resources, run time and limit, start and end times, the failure reason, app progress, the folder (last two levels, no username) and the cost (with billing on); "Brief" has just the title and server. Usernames, host addresses and logs are never sent.</span></li>
+        <li><span lang="zh"><b>不刷屏</b>：10 秒内的提醒合并成一条，每分钟最多 15 条；勿扰时段不推送（失败的可以照常推送）；静音的服务器不推送。</span>
+            <span lang="en"><b>No flood</b>: alerts within 10 seconds become one message, at most 15 a minute; nothing during quiet hours (failures can still go through); muted servers never push.</span></li>
+      </ul>
+      <pre><code>✅ gnep-train 已完成
+服务器：集群A（Slurm）
+作业号：12345 · 分区 gpu
+资源：1 节点 · 32 核 · 4 GPU
+用时：3 小时 12 分（上限 24 小时，用了 13%）
+时间：11:20 开始 → 14:32 结束
+GNEP 训练：200/200 epoch · loss 1.23e-2
+目录：~/nep/train-03
+费用：约 ¥38.40</code></pre>
+      <div class="callout tip"><p><span lang="zh"><b>没收到？</b>设置页上会显示最近一次推送的结果和原因（比如"key 无效"）。企业微信拒绝 key 时推送会暂停，重新粘贴一次地址即可。诊断日志里每次推送都有一行"手机推送"，key 只显示最后 4 位。</span>
+        <span lang="en"><b>Nothing arrived?</b> The settings page shows the latest result and why (for example "Invalid key"). If WeCom rejects the key, pushing pauses until you paste the URL again. Every push is logged in the diagnostic log under "手机推送", with only the last 4 characters of the key.</span></p></div>
+    </section>
+
+    <!-- 费用 -->
+    <section id="billing">
+      <h2><span lang="zh">估算费用</span><span lang="en">Cost estimates</span></h2>
+      <ol>
+        <li><span lang="zh">设置 → <b>计费</b> → 打开"估算费用"，选货币。</span>
+            <span lang="en">Settings → <b>Billing</b> → turn on "Estimate Costs" and pick a currency.</span></li>
+        <li><span lang="zh">每台 Slurm / PBS 服务器下面填单价：按卡时、核时或节点时。可以点"从服务器读取分区"（只读），再给每个分区填价格；没单独填的分区按"其他分区"算，填 0 的不计费。</span>
+            <span lang="en">Under each Slurm / PBS server, set prices per GPU-hour, core-hour or node-hour. "Read Partitions from Server" (read-only) fills in the list; partitions without their own row use "Other partitions", and a price of 0 isn't billed.</span></li>
+        <li><span lang="zh">刘海顶部会多一个钱币按钮，打开费用页：今天、本月、上月、正在跑的任务每小时多少钱、本月每天的花费、按服务器和分区汇总、本月最贵的作业。作业详情和历史记录里也会显示费用。</span>
+            <span lang="en">A coin button appears at the top of the island and opens the Costs page: today, this month, last month, the hourly rate of running jobs, a day-by-day chart, totals per server and partition, and the most expensive jobs. Job details and History show costs too.</span></li>
+      </ol>
+      <p><span lang="zh">费用 = 单价 × 调度系统分给作业的资源 × 运行时长。每个运行中的作业只多查一次分到的资源；直连服务器不计费。这是估算，以计算中心的账单为准。</span>
+         <span lang="en">Cost = price × resources the scheduler allocated × run time. Each running job's allocation is queried once; direct servers aren't billed. It's an estimate — your provider's bill is what counts.</span></p>
+      <figure class="shot"><img data-shot="costs" alt="Costs page" loading="lazy"></figure>
     </section>
 
     <!-- 登录 -->
@@ -240,8 +306,8 @@
     <!-- 进度 -->
     <section id="progress">
       <h2><span lang="zh">计算进度</span><span lang="en">Computation progress</span></h2>
-      <p><span lang="zh">ServerIsland 会看任务工作目录里的文件，自动认出 NEP / GNEP、GPUMD、VASP 和 LAMMPS，显示真实的进度而不只是"运行中"。格式对不上时宁可不显示，也不会给你一个错的数字。</span>
-         <span lang="en">ServerIsland looks at the files in each job's working directory and recognises NEP / GNEP, GPUMD, VASP and LAMMPS, so you see real progress instead of just "RUNNING". If anything doesn't match, it shows nothing rather than a wrong number.</span></p>
+      <p><span lang="zh">ServerIsland 会看任务工作目录里的文件，自动认出 NEP / GNEP、TorchNEP、MACE、DeePMD-kit、GPUMD、VASP 和 LAMMPS，显示真实的进度而不只是"运行中"。格式对不上时宁可不显示，也不会给你一个错的数字。</span>
+         <span lang="en">ServerIsland looks at the files in each job's working directory and recognises NEP / GNEP, TorchNEP, MACE, DeePMD-kit, GPUMD, VASP and LAMMPS, so you see real progress instead of just "RUNNING". If anything doesn't match, it shows nothing rather than a wrong number.</span></p>
       <ul>
         <li><span lang="zh"><b>自己的程序</b>：设置 → 进度识别 → 添加规则。填一个文件名（可以用 <code>*.log</code>）和关键字（比如 <code>epoch</code>），点"测试"就能在真实目录上试，规则对所有服务器生效。</span>
             <span lang="en"><b>Your own code</b>: Settings → Progress Detection → Add Rule. Give a file name (wildcards like <code>*.log</code> work) and a keyword such as <code>epoch</code>, then hit "Test" against a real directory. Rules apply to every server.</span></li>
@@ -302,6 +368,8 @@
       </table>
       <p><span lang="zh">诊断日志只在本机，默认保留 7 天（设置 → 通用 → 文件与诊断 → 日志保留，可改成 1 天到永久），也可以点"清除日志…"马上清空。</span>
          <span lang="en">The diagnostic log stays on your computer and is kept for 7 days by default (Settings → General → Files &amp; Diagnostics → Keep Logs For, from 1 day to forever); "Clear Log…" empties it right away.</span></p>
+      <p><span lang="zh">换电脑时可以用 设置 → 通用 → 文件与诊断 → 导出 / 导入设置，Mac 和 Windows / Linux 之间也能互相导入（替换前会先备份；密码和手机推送的 key 不会导出）。</span>
+         <span lang="en">Moving to another computer? Use Settings → General → Files &amp; Diagnostics → Export / Import Settings — it works between the Mac and Windows / Linux too (your current settings are backed up first; passwords and the phone-push key are never exported).</span></p>
       <p><span lang="zh">三个平台的配置文件格式一样，可以直接拷过去用。设置 → 通用 → 文件与诊断 里有打开这两个位置的按钮。卸载时删掉 App（或解压出来的文件夹）和上面两个目录即可。</span>
          <span lang="en">The settings file has the same format on all three platforms, so you can copy it across. Settings → General → Files &amp; Diagnostics has buttons to open both locations. To uninstall, delete the app (or the unzipped folder) and the two folders above.</span></p>
       <div class="doc-next">
@@ -322,9 +390,9 @@
   </span>
 </footer>
 
-<script src="js/config.js?v=20261021a"></script>
-<script src="js/tako.js?v=20261021a"></script>
-<script src="js/main.js?v=20261021a"></script>
+<script src="js/config.js?v=20261108a"></script>
+<script src="js/tako.js?v=20261108a"></script>
+<script src="js/main.js?v=20261108a"></script>
 <script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
 </body>
 </html>
