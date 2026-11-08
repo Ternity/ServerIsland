@@ -7,6 +7,13 @@
     <ApplicationIcon>Assets\ServerIsland.ico</ApplicationIcon>
     <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!-- 副屏的蓝牙要用 WinRT 的 Bluetooth LE 接口：给 Windows 打包（-r win-*）或在 Windows 上编译时换成 Windows 专用的目标框架。
+         在 macOS / Linux 上也能检查 Windows 版能否编译：dotnet build -r win-x64 -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('win')) or ('$(RuntimeIdentifier)' == '' and '$(OS)' == 'Windows_NT')">
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.22" />

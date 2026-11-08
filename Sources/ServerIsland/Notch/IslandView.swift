@@ -369,6 +369,9 @@ struct ExpandedContent: View {
                 vm.returnPage = .jobs
                 vm.page = .job(host: host.id, job: job.id)
             }
+        case .costs:
+            CostPage(engine: engine, store: store, onBack: back,
+                     onOpenSettings: { SettingsView.open(.billing, show: vm.openSettings) })
         case .list:
             EmptyView()
         }
@@ -408,6 +411,13 @@ struct ExpandedContent: View {
 
             HStack(spacing: 8) {
                 GlobalPollMenu(store: store, engine: engine)
+                if store.settings.billingEnabled {
+                    IslandIconButton(systemName: Billing.symbol(store.settings.currency),
+                                     help: L("费用：今天、本月、按分区和作业（估算）", "Costs: today, this month, by partition and job (estimate)"),
+                                     active: vm.page == .costs) {
+                        vm.page = vm.page == .costs ? .list : .costs
+                    }
+                }
                 IslandIconButton(systemName: "list.bullet.rectangle", help: L("全部任务：所有服务器的任务，可搜索、筛选", "All jobs across servers: search and filter"),
                                  active: vm.page == .jobs) {
                     if vm.page == .jobs { vm.page = .list } else { vm.openAllJobs() }

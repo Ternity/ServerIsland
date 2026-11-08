@@ -242,6 +242,36 @@ enum SelfTestApps {
         check(tnc?.series.map(\.name) == ["Loss", "E", "F", "V"] && tnc?.series.first?.points.map(\.x) == [1, 2, 3]
               && tnc?.series.first?.points.last?.y == 0.15 && tnc?.xLabel == "epoch", "曲线：TorchNEP（从检查点续跑时去掉重跑的那段）")
 
+        // DeePMD（PyTorch 后端）：lcurve.out 带表头，续跑时表头会再写一遍；num_epochs 换算后的总步数只在日志里
+        let dpHeader = "# step      mae_e_val   mae_e_trn     mae_f_val   mae_f_trn     mae_v_val   mae_v_trn      rmse_val    rmse_trn   lr\n# If there is no available reference data, rmse_*_{val,trn} will print nan\n"
+        let dpDir = make("deepmd", ["input.json": #"{"training": {"num_epochs": 100, "disp_file": "lcurve.out"}}"#,
+                                    "lcurve.out": dpHeader + "      1      2.79e-01    3.64e-01      3.00e+00    4.86e+00      2.82e-01    4.39e-01      7.93e+00    1.03e+01    6.0e-05\n"
+                                        + "    500      1.20e-01    1.30e-01      9.00e-01    9.50e-01      1.00e-01    1.10e-01      4.00e+00    4.20e+00    1.0e-04\n"
+                                        + dpHeader + "  20000      1.26e-02    1.83e-02      1.90e-01    1.73e-01      2.52e-02    2.02e-02      2.00e+00    1.92e+00    2.9e-04\n",
+                                    "val.log": "#  step   E_MAE(meV/atom)\n   10000      113.47\n",
+                                    "log": "[2026-11-06 20:04:32,900] DEEPMD INFO    Computed num_steps=3016700 from num_epoch=100.0 and total_numb_batch=30167.\n[2026-11-06 20:04:32,933] DEEPMD INFO    Start to train 3016700 steps.\n[2026-11-06 20:05:00,000] DEEPMD INFO    Batch   20000: total wall time = 64.75 s\n"])
+        let dp = detect(dpDir)
+        check(dp?.kind == .deepmd && dp?.current == 20000 && dp?.total == 3016700 && dp?.hasTarget == true && dp?.dataFile == "lcurve.out"
+              && dp?.losses.prefix(3).map(\.label) == ["MAE E val", "MAE F val", "MAE V val"] && dp?.losses.last?.label == "lr"
+              && dp?.losses.first?.value == 0.0126 && dp?.endMarker == nil,
+              "DeePMD：lcurve.out（续跑时重复的表头）+ 日志里的总步数")
+        try? "[2026-11-11 09:00:00,000] DEEPMD INFO    Trained model has been saved to: model.ckpt\n".write(toFile: dpDir + "/log2.log", atomically: true, encoding: .utf8)
+        try? FileManager.default.removeItem(atPath: dpDir + "/log")
+        let dpDone = detect(dpDir)
+        check(dpDone?.kind == .deepmd && dpDone?.total == nil && dpDone?.hasTarget == false && dpDone?.current == 20000
+              && dpDone?.endMarker == true && dpDone?.finished == true,
+              "DeePMD：日志里没有总步数时只显示当前步；Trained model has been saved 是结束标记")
+        let dpTF = detect(make("deepmd-tf", ["input.json": "{\n  \"training\": {\n    \"numb_steps\": 1000000,\n    \"disp_freq\": 100\n  }\n}\n",
+                                             "lcurve.out": "#  step      rmse_trn    rmse_e_trn    rmse_f_trn         lr\n      0      2.21e+01      1.34e+00      6.98e-01    1.0e-03\n    100      1.03e+01      nan      4.11e-01    1.0e-03\n",
+                                             "train.log": "DEEPMD INFO    batch    1000 training time 5.2 s\nDEEPMD INFO    average training time: 0.0520 s/batch\n"]))
+        check(dpTF?.current == 100 && dpTF?.total == 1_000_000 && dpTF?.losses.map(\.label) == ["RMSE F trn", "RMSE trn", "lr"] && dpTF?.endMarker == true,
+              "DeePMD（TensorFlow）：numb_steps、nan 不显示、average training time 结束标记")
+        let dpSrc = AppCurves.Source.loss(path: dpDir + "/lcurve.out", kind: .deepmd)
+        let dpCache = AppCurves.merge(bash(AppCurves.script(dpSrc, offset: 0, head: "")), into: CurveCache())
+        let dpc = dpCache.flatMap { AppCurves.curve(dpSrc, rows: $0.rows, extra: $0.extra) }
+        check(dpc?.series.map(\.name) == [L("能量", "Energy"), L("力", "Force"), L("维里", "Virial")] && dpc?.series.first?.points.map(\.x) == [1, 500, 20000]
+              && dpc?.series[1].points.last?.y == 0.19 && dpc?.logY == true, "曲线：DeePMD lcurve.out（验证集的 E / F / V）")
+
         // MACE：logs/<名字>_run-<种子>.log；总 epoch 取自 _debug.log 的参数，正在跑的 epoch 取自 results/*_train.txt
         let maceLog = """
         2026-01-14 20:25:46.805 INFO: ===========VERIFYING SETTINGS===========

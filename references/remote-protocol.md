@@ -52,6 +52,7 @@
 | `gpu`、`gpuapps` | showGPU，或者需要列进程 | nvidia-smi（没有就输出 NA） |
 | `squeue` | Slurm 且 watchJobs | `squeue -u $(id -un) -h -o '%i\|%j\|%T\|%M\|%l\|%D\|%R\|%P\|%F\|%K'` |
 | `qstat` | PBS 且 watchJobs | `commands.qstat`（默认 `qselect -u` + `qstat -f -t`）的输出经 `si_pbs q` 转换成和 squeue 一样的行（见下文 PBS） |
+| `alloc` | 打开计费、这台机器填了单价（自定义 squeue 时还要有没查过资源的运行中作业） | Slurm：默认 squeue 时从这一轮的 `SI_JW` 里取 RUNNING 的作业、跳过 `SI_K` 里已经知道资源的（新作业同一轮就查到）；自定义 squeue 时查上一轮看到的。每个作业一次 `scontrol show job -o`，输出 `作业号\|AllocTRES（老版本叫 TRES）\|TresPerNode\|TresPerJob\|NumNodes`，一轮最多 20 个；PBS：`si_pbs t` 从 `SI_PQ` 里取，不再查询（见下文计费） |
 | `workdirs` | watchJobs（2026-10-18 起总是有：工作目录写进历史记录） | `@@SI:HOME 家目录`，再加 `id\|工作目录`：Slurm 用 `squeue -o '%i\|%Z'`，PBS 用 `si_pbs d`，进程用 `readlink /proc/PID/cwd` |
 | `procs` | 直连；或 Slurm / PBS 且 slurmAlsoProcesses | `ps -u … -o pid=,etimes=,pcpu=,rss=,args= --sort=-pcpu \| head -300` |
 | `slurmpids` | Slurm / PBS 且 slurmAlsoProcesses | 属于作业的进程（`SI_PT` 里作业号不为空的；作业号用 `si_jobid` 判断：`SLURM_JOB_ID` / `SLURM_ARRAY_*` / `PBS_JOBID`），这些进程不再单独列出 |
@@ -78,6 +79,19 @@ squeue 的解析是**从两端按位置取列**，所以作业名里有 `|` 也�
 - 不支持：分区页（卡片上不显示这个按钮）、24 小时历史（只用本机记录）。
 - awk 只用 POSIX 写法（`delete 数组` 除外，gawk / mawk / BSD awk 都支持）；Mac 上用 BSD awk 跑自检，Linux CI 上是 mawk。
 
+## 计费（`Models/Billing.swift`，2026-11-05）
+
+估算费用 = 分到的资源 × 运行时长 × 用户填的单价。默认关闭；关闭时远端脚本和以前完全一样。
+- **运行中的作业**：`alloc` 段（见上表）。Slurm 每个作业只查一次（引擎的 `allocCache` 记住结果，作业离开列表后清掉），新版 `scontrol show job` 的字段是 `AllocTRES=`，老版本是 `TRES=`，两个都认。PBS 的资源在 `qstat -f` 全文里本来就有，`si_pbs t` 每轮直接转换，不多查。
+- **结束的作业**：默认 sacct 命令末尾加了 `AllocTRES`（旧的默认命令自动升级；用户改过的不动），`si_pbs a` 末尾也加了一列资源。`Parsers.sacctAllocs` 只认最后一列里带 `=` 的；原来的 `Parsers.sacct` 不受影响。结束时优先用这里的资源和时长，查不到时用运行时记下的（ServerIsland 退出期间结束的作业，用 `active-jobs.json` 里存的分区和资源补记）。
+- **没统计 gres/gpu 的 Slurm**：`AccountingStorageTRES` 里没有 `gres/gpu` 时，作业分到了卡，AllocTRES（和 sacct）里却没有。这时按申请的卡数算：`TresPerJob`（`--gpus=4`）优先，否则 `TresPerNode`（`--gres=gpu:1`，如 `gres/gpu:a100:2`、老版本 `gres:gpu:1`）× 节点数。GPU 是整张分配的，申请几张就占几张。结束时 sacct 里没有卡、运行时看到过卡，卡数用运行时的（`JobAlloc.best`）。`--gpus-per-task` 暂不处理。
+- **TRES 解析**（`JobAlloc.parse`）：`cpu=`、`node=`；加速卡认 `gres/gpu|dcu|npu|mlu`，同一种卡既有总数（`gres/gpu=4`）又有分型号（`gres/gpu:a100=4`）时只用总数，只有分型号时相加；写了 CPU 却没有卡就是 0 张卡。
+- **PBS 的资源**：PBS Pro / OpenPBS 用 `Resource_List.ncpus` / `ngpus`；Torque 从 `Resource_List.nodes=2:ppn=16:gpus=2`（多段用 `+` 连接）里乘出来；节点数同列表里的 nodect。写成 `cpu=32,node=2,gres/gpu=4`，和 Slurm 共用解析。
+- **分区**：Slurm 是 squeue 的 `%P`，PBS 是队列；节点数是 `%D`。单价先找同名分区，再用"其他分区"（分区名为空的一行）；单价为 0 不计费。计价方式：按卡时 / 核时 / 节点时（节点数没写时用 `%D`）。
+- **设置页读取分区**：Slurm 复用分区页的 `Partitions.script`（sinfo），PBS 用 `qstat -Q`（`pbsQueuesScript`）。只读。
+- **账本**：`cost-ledger.json`（保留 400 天），每条记下当时的单价（以后改单价不影响旧账）；数组按元素记，按主编号汇总；同一个编号只记一次。没开计费、没有单价或不知道资源量时不记。
+- 2026-11-05 在真实服务器上只读核对过（`--diagnose` 末尾的"计费"一段）：一台 Slurm 26 集群的 sacct AllocTRES 形如 `billing=150,cpu=8,gres/gpu=1,mem=15G,node=1`；一台单机 Slurm 工作站的 scontrol 只有 `AllocTRES=`（没有 `TRES=`），而且它的 `AccountingStorageTRES` 没有 `gres/gpu`，申请了 `--gres=gpu:1` 的作业 AllocTRES 里也没有卡；按申请数兜底后算 1 卡（同日复查过）。
+
 ## 目录过滤（`HostConfig.pathFilter`，2026-10-18）
 
 - 每行一个目录（逗号、分号也行），`~` 按服务器上的家目录展开；目录本身和子目录都算，`/a/LLZO` 不会匹配 `/a/LLZO2`。
@@ -87,6 +101,7 @@ squeue 的解析是**从两端按位置取列**，所以作业名里有 `|` 也�
 其它脚本：
 - `sacctScript`：`{jobs}` 替换成作业号列表（PBS 见上文）；
 - `detailScript`、`cancelScript`：作业号经过 `safeSlurmID`（只允许 `^\d+(_\d+)?$`），PID 必须是纯数字；
+- `pbsQueuesScript`：`qstat -Q`（计费设置页读取 PBS 队列）；
 - `historyScript`、`topProcessesScript`、`detectScript`（另外检测本机是否在运行 slurmd；没有 squeue 但有 qstat + qselect 时判定为 PBS）；
 - `Partitions.script`：
   - `sinfo -h -o '%P|%a|%l'`：分区汇总；
@@ -108,6 +123,13 @@ squeue 的解析是**从两端按位置取列**，所以作业名里有 `|` 也�
    - `loss.out` + `gnep.in` → GNEP：目标是 `epoch`（默认 50）；
    - **MACE**：`logs/*.log`（去掉 `_debug.log`）里最新的一个，前 20 行有 `MACE version`。目标 = `logs/<名字>_debug.log` 里参数 Namespace 的 `max_num_epochs`；当前 = max(日志最后一行 `INFO: Epoch N:` 的 N+1，`results/<名字>_train.txt` 最后一行 `"epoch": K` 的 K)（epoch 从 0 数；日志每 eval_interval 个 epoch 才一行，results 每个 batch 一行）；误差按 `名字=数字 单位` 通用地取（error_table 不同名字不同）；`Training complete` → `done=1`（提前停止也算完成，同样只输出 done=1）。mtime 取日志和 results 里较新的；
    - （VASP、LAMMPS、自定义规则见下一节）
+   - **DeePMD-kit**（2026-11-07）：`lcurve.out` 第一行是带 `step` 的 `#` 表头。当前步 = 最后一行不以 # 开头的数据的第一列（`--restart` 续跑时 lcurve.out 追加写入、表头再写一遍，步数接着数）。
+     - 目标步数：先在目录里最新的 5 个 `log` / `*.log` / `*.out`（去掉 lcurve.out）的前 3MB 里找 `Start to train N steps`（PyTorch 后端打印，`num_epochs` 换算成步数后只在这里有）→ `logsteps=`；其次 `input.json` / `out.json` 的 `numb_steps` / `num_steps` / `stop_batch` → `steps=`。都没有就只显示当前步。当前步超过目标时不显示（按总原则）。
+     - 日志：第一个"前 3MB 有 Start to train 或末尾 40 行有 DEEPMD"的候选文件；末尾有 `Trained model has been saved to`（PyTorch）或 `average training time`（TensorFlow）→ `done=1`（只输出 done=1）。
+     - 列名由表头决定（`AppDetectors.deepmdLabels`）：`mae_e_val` → `MAE E val`，`rmse_f_trn` → `RMSE F trn`，`rmse_val` → `RMSE val`，多任务后缀保留；`nan`（没有验证集）不显示。排序：验证集在前，E → F → V → 总误差，lr 最后；任务行显示前两项。
+     - 签名：lcurve.out 和这几个日志的 `%Y.%s`，没变就 `same=1`（日志要 grep，所以做这一步）。
+     - 曲线：lcurve.out，E / F / V 各一条（有验证集用验证集，多任务取第一个，没有就用训练集并标"训练集"；三项都没有时画总误差），横轴是 step，过一遍 `monotonic`。
+     - 实测（一台单卡工作站上 DeePMD v3.2.1 PyTorch 后端、num_epochs=100 → 3016700 步）：识别、目标、曲线增量读取都正常。
    - `run.in` + (`neighbor.out` | `thermo.out`) → GPUMD：目标是所有 `run N` 之和；当前步数优先取 `neighbor.out` 最后一行（`Neighbor info at step N: radial(max=,actual=), angular(...)`），否则用 `thermo.out` 的有效行数 × `dump_thermo`；
    - 同时输出 `mtime=$(stat -c %Y …)`，用来判断输出是否停止更新。
 3. loss.out 的列：`gen Total L1 L2 Energy Force Virial [E-test F-test V-test]`（7 列及以上），或者 `epoch Loss Energy Force Virial`。test 列全为 0 时不显示。

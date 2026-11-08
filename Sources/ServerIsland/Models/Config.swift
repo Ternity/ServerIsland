@@ -107,7 +107,8 @@ struct CommandSet: Codable, Equatable {
     var preamble = ""
     var squeue = #"squeue -u "$(id -un)" -h -o '%i|%j|%T|%M|%l|%D|%R|%P|%F|%K'"#
     /// `{jobs}` 会被替换为逗号分隔的作业号。只在作业从队列消失时调用一次。
-    var sacct = "sacct -n -X -P -o JobID,JobName,State,Elapsed,ExitCode -j {jobs}"
+    /// 最后一列 AllocTRES 是作业分到的资源（计费用）；没有这一列也能解析。
+    var sacct = "sacct -n -X -P -o JobID,JobName,State,Elapsed,ExitCode,AllocTRES -j {jobs}"
     var gpu = "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits"
     var gpuApps = "nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits"
     var processes = #"ps -u "$(id -un)" -o pid=,etimes=,pcpu=,rss=,args= --sort=-pcpu | head -n 300"#
@@ -130,6 +131,8 @@ struct CommandSet: Codable, Equatable {
         // 旧版默认命令没有数组列（%F|%K），自动升级。
         if squeue == #"squeue -u "$(id -un)" -h -o '%i|%j|%T|%M|%l|%D|%R|%P'"# { squeue = d.squeue }
         sacct = try c.decodeIfPresent(String.self, forKey: .sacct) ?? d.sacct
+        // 旧版默认命令没有 AllocTRES（计费用），自动升级。
+        if sacct == "sacct -n -X -P -o JobID,JobName,State,Elapsed,ExitCode -j {jobs}" { sacct = d.sacct }
         gpu = try c.decodeIfPresent(String.self, forKey: .gpu) ?? d.gpu
         gpuApps = try c.decodeIfPresent(String.self, forKey: .gpuApps) ?? d.gpuApps
         processes = try c.decodeIfPresent(String.self, forKey: .processes) ?? d.processes
@@ -195,6 +198,8 @@ struct HostConfig: Codable, Identifiable, Equatable {
     var rememberPassword = false
     /// 只看这些目录下的任务（每行一个，可用 ~）。作业按工作目录、进程按当前目录判断；空表示不过滤。
     var pathFilter = ""
+    /// 各分区的单价（计费）；分区名为空的一行是"其他分区"。
+    var prices: [PartitionPrice] = []
 
     /// 过滤目录列表（去掉空行）。
     var pathPrefixes: [String] {
@@ -249,6 +254,7 @@ struct HostConfig: Codable, Identifiable, Equatable {
         jumpHostID = try c.decodeIfPresent(UUID.self, forKey: .jumpHostID)
         rememberPassword = try c.decodeIfPresent(Bool.self, forKey: .rememberPassword) ?? false
         pathFilter = try c.decodeIfPresent(String.self, forKey: .pathFilter) ?? ""
+        prices = try c.decodeIfPresent([PartitionPrice].self, forKey: .prices) ?? []
     }
 }
 
@@ -322,6 +328,12 @@ struct AppSettings: Codable, Equatable {
     var deadlines: [Deadline] = []
     /// 副屏上显示天气的城市（空 = 不显示；数据来自 Open-Meteo）。
     var weatherCity = ""
+    /// 计费（估算费用），默认关闭。单价在各服务器的 `prices` 里。
+    var billingEnabled = false
+    /// 货币符号。
+    var currency = "¥"
+    /// 手机推送（企业微信群机器人）。key 只存钥匙串，不在这里。
+    var phonePush = PhonePushSettings()
 
     init() {}
 
@@ -358,6 +370,9 @@ struct AppSettings: Codable, Equatable {
         quietHours = try c.decodeIfPresent(Bool.self, forKey: .quietHours) ?? false
         quietStart = try c.decodeIfPresent(Int.self, forKey: .quietStart) ?? 23 * 60
         quietEnd = try c.decodeIfPresent(Int.self, forKey: .quietEnd) ?? 8 * 60
+        billingEnabled = try c.decodeIfPresent(Bool.self, forKey: .billingEnabled) ?? false
+        currency = try c.decodeIfPresent(String.self, forKey: .currency) ?? "¥"
+        phonePush = try c.decodeIfPresent(PhonePushSettings.self, forKey: .phonePush) ?? PhonePushSettings()
     }
 
     /// 现在是否在勿扰时段里。起点等于终点时不算勿扰。
@@ -388,6 +403,73 @@ struct AppSettings: Codable, Equatable {
         case .warning: break
         }
         return alertScope == .all || isStarred(host, job)
+    }
+}
+
+/// 手机推送的设置。默认只推送关注（⭐）的任务：平时人在电脑前看刘海就够了，要离开时给重要的任务点个星。
+struct PhonePushSettings: Codable, Equatable {
+    var enabled = false
+    var scope: PushScope = .starred
+    var started = false
+    var finished = true
+    var failed = true
+    var unknown = true
+    /// 磁盘快满等服务器级提醒。
+    var serverWarnings = true
+    /// Claude Code / Codex / OpenCode。
+    var agents = false
+    var agentAttention = true
+    var agentDone = true
+    /// 详细：资源、用时、目录、软件进度、费用……；简洁：只有标题和服务器。
+    var detailed = true
+    /// 勿扰时段（通用页设置的时间）里不推送。
+    var followQuietHours = true
+    /// 勿扰时段里失败的任务照常推送。
+    var failuresDuringQuiet = true
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PhonePushSettings()
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
+        scope = try c.decodeIfPresent(PushScope.self, forKey: .scope) ?? d.scope
+        started = try c.decodeIfPresent(Bool.self, forKey: .started) ?? d.started
+        finished = try c.decodeIfPresent(Bool.self, forKey: .finished) ?? d.finished
+        failed = try c.decodeIfPresent(Bool.self, forKey: .failed) ?? d.failed
+        unknown = try c.decodeIfPresent(Bool.self, forKey: .unknown) ?? d.unknown
+        serverWarnings = try c.decodeIfPresent(Bool.self, forKey: .serverWarnings) ?? d.serverWarnings
+        agents = try c.decodeIfPresent(Bool.self, forKey: .agents) ?? d.agents
+        agentAttention = try c.decodeIfPresent(Bool.self, forKey: .agentAttention) ?? d.agentAttention
+        agentDone = try c.decodeIfPresent(Bool.self, forKey: .agentDone) ?? d.agentDone
+        detailed = try c.decodeIfPresent(Bool.self, forKey: .detailed) ?? d.detailed
+        followQuietHours = try c.decodeIfPresent(Bool.self, forKey: .followQuietHours) ?? d.followQuietHours
+        failuresDuringQuiet = try c.decodeIfPresent(Bool.self, forKey: .failuresDuringQuiet) ?? d.failuresDuringQuiet
+    }
+
+    /// 需要读取 Agent 会话（副屏没连着时也要读）。
+    var wantsAgents: Bool { enabled && agents && (agentAttention || agentDone) }
+}
+
+enum PushScope: String, Codable, CaseIterable, Identifiable {
+    case starred
+    case all
+    case island
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .starred: return L("只推送关注（⭐）的任务", "Starred Jobs Only")
+        case .all: return L("全部任务", "All Jobs")
+        case .island: return L("和刘海提醒一样", "Same as Island Alerts")
+        }
+    }
+    var shortLabel: String {
+        switch self {
+        case .starred: return L("关注的任务", "starred jobs")
+        case .all: return L("全部任务", "all jobs")
+        case .island: return L("同刘海提醒", "as island alerts")
+        }
     }
 }
 

@@ -2,7 +2,7 @@ using ServerIsland.Core;
 
 namespace ServerIsland.Desktop.Island;
 
-public enum PageKind { List, Job, History, Picker, Jobs, Partitions }
+public enum PageKind { List, Job, History, Picker, Jobs, Partitions, Costs }
 
 /// 展开面板里的二级页面。
 public sealed record IslandPage(PageKind Kind, Guid Host = default, string Job = "")
@@ -57,6 +57,8 @@ public sealed class IslandState
 
     public event Action? PageChanged;
     public Action OpenSettings = () => { };
+    /// 打开设置并切到某一页（如费用页的"设置单价"："billing"）。
+    public Action<string> OpenSettingsPage = _ => { };
     public Action Unpinned = () => { };
     public Action RequestRebuild = () => { };
 

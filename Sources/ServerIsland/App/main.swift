@@ -24,6 +24,21 @@ if let i = arguments.firstIndex(of: "--render-preview"), i + 1 < arguments.count
     exit(0)
 }
 
+// 开发用：打印手机推送的示例消息（不联网）。  ServerIsland --push-preview [zh|en]
+if let i = arguments.firstIndex(of: "--push-preview") {
+    Lang.setting = i + 1 < arguments.count && arguments[i + 1] == "en" ? .en : .zh
+    let samples = PhonePush.samples()
+    var items: [PhonePush.Item] = []
+    for (e, h) in samples {
+        let item = PhonePush.item(e, host: h, detailed: true)
+        items.append(item)
+        print(item.text + "\n")
+    }
+    print("—— " + L("简洁", "Brief") + " ——\n" + PhonePush.item(samples[0].0, host: samples[0].1, detailed: false).text + "\n")
+    print("—— " + L("合并", "Merged") + " ——\n" + PhonePush.merged(items, hosts: samples.map(\.1)))
+    exit(0)
+}
+
 // 开发用：在临时目录里走一遍自动更新（假的 App 和 DMG，不碰真正的 App）。  ServerIsland --test-update <目录> [真实的.dmg 版本号]
 // 给了真实的 DMG 时，再对它做一次校验、挂载和检查（只取出到临时目录）。
 if let i = arguments.firstIndex(of: "--test-update"), i + 1 < arguments.count {

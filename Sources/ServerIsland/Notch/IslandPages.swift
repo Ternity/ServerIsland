@@ -9,6 +9,7 @@ enum IslandPage: Equatable {
     case picker(host: UUID)
     case jobs
     case partitions(host: UUID)
+    case costs
 }
 
 // MARK: - 通用
@@ -173,6 +174,10 @@ struct JobDetailPage: View {
                 }
             }
             if let a = job.array {
+                if let c = costText {
+                    Label(c, systemImage: Billing.symbol(engine.store.settings.currency))
+                        .font(Theme.rounded(10.5)).foregroundStyle(Theme.secondary)
+                }
                 ArrayOverview(job: job, array: a, onOpen: onOpenElement)
             } else {
                 fields
@@ -237,6 +242,7 @@ struct JobDetailPage: View {
                 case .nep, .gnep: p += L("，未设目标按默认值", ", default target")
                 case .vasp: p += a.vaspMode == .relax ? L("（收敛前不知道总步数）", " (total unknown until converged)") : ""
                 case .torchnep, .mace: p += L("，没读到总 epoch", ", total epochs unknown")
+                case .deepmd: p += L("，没读到总步数", ", total steps unknown")
                 case .lammps, .custom: break
                 }
             }
@@ -260,10 +266,22 @@ struct JobDetailPage: View {
         return f
     }
 
+    /// 费用（打开计费、填了单价、知道分到的资源时）："¥12.40 · ¥4.00/小时 · 4 卡 × ¥1.00/卡时"。
+    private var costText: String? {
+        guard let c = engine.liveCost(host, job) else { return nil }
+        let cur = engine.store.settings.currency
+        var parts = [L("约 ", "≈ ") + Billing.money(c.spent, currency: cur)]
+        if c.perHour > 0 { parts.append(Billing.money(c.perHour, currency: cur) + L("/小时", "/h")) }
+        if !c.detail.isEmpty { parts.append(c.detail) }
+        return parts.joined(separator: " · ")
+    }
+
     private var fields: some View {
         var all = appFields
+        // 费用整行显示（见下面的 long），不会因为字段太多被截掉
+        if let c = costText { all.insert((L("费用", "Cost"), c), at: 0) }
         for kv in detail?.fields ?? [] where !all.contains(where: { $0.0 == kv.0 }) { all.append(kv) }
-        let long = Set([L("命令", "Command"), L("工作目录", "Directory"), L("资源", "Resources"), L("节点", "Nodes"), "Loss",
+        let long = Set([L("命令", "Command"), L("工作目录", "Directory"), L("资源", "Resources"), L("节点", "Nodes"), "Loss", L("费用", "Cost"),
                         L("近邻", "Neighbors"), L("进度", "Progress"), L("排队原因", "Pending reason")])
         let short = all.filter { !long.contains($0.0) }.prefix(job.app == nil ? 8 : 10)
         let wide = all.filter { long.contains($0.0) }
@@ -487,6 +505,8 @@ struct HistoryPage: View {
     @ObservedObject var engine: MonitorEngine
     var onBack: () -> Void
     var preloaded: [HistoryEntry]?
+    /// 预览渲染用：各任务的费用。
+    var preloadedCosts: [String: Double]?
     @State private var entries: [HistoryEntry]?
     @State private var fromServer = false
 
@@ -499,6 +519,12 @@ struct HistoryPage: View {
                     HStack(spacing: 8) {
                         Label("\(done)", systemImage: "checkmark").foregroundStyle(Theme.mint)
                         Label("\(failed)", systemImage: "xmark").foregroundStyle(failed > 0 ? Theme.coral : Theme.tertiary)
+                        if billing {
+                            let total = e.compactMap(cost).reduce(0, +)
+                            Text(Billing.money(total, currency: engine.store.settings.currency))
+                                .foregroundStyle(total > 0 ? Theme.amber : Theme.tertiary)
+                                .help(L("列表里这些任务的估算费用合计", "Estimated total for the jobs listed"))
+                        }
                     }
                     .font(Theme.rounded(11, .semibold))
                 }
@@ -525,6 +551,13 @@ struct HistoryPage: View {
             fromServer = r.fromServer
             entries = r.entries
         }
+    }
+
+    private var billing: Bool { engine.billingActive(host) }
+
+    private func cost(_ e: HistoryEntry) -> Double? {
+        if let preloadedCosts { return preloadedCosts[e.id] }
+        return engine.costs.cost(host: host.id, id: e.id)
     }
 
     private var sourceText: String {
@@ -572,6 +605,13 @@ struct HistoryPage: View {
             }
             Text(e.elapsed.map(Format.duration) ?? "—").font(Theme.rounded(10.5).monospacedDigit())
                 .foregroundStyle(Theme.secondary).frame(width: 64, alignment: .trailing)
+            if billing {
+                Text(cost(e).map { Billing.money($0, currency: engine.store.settings.currency) } ?? "—")
+                    .font(Theme.rounded(10.5, .medium).monospacedDigit())
+                    .foregroundStyle(cost(e) == nil ? Theme.tertiary : Theme.amber)
+                    .frame(width: 62, alignment: .trailing)
+                    .help(L("估算费用（按结束时的单价）", "Estimated cost (at the price when it ended)"))
+            }
             Text(Format.relative(e.endedAt)).font(Theme.rounded(10.5)).foregroundStyle(Theme.tertiary)
                 .frame(width: 58, alignment: .trailing)
                 .help(e.endedAt.formatted(date: .abbreviated, time: .shortened))

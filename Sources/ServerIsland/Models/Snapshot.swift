@@ -70,6 +70,11 @@ struct RemoteJob: Identifiable, Equatable {
     var reason: String?
     /// 工作目录（作业：调度系统记录的；进程：当前目录）。写进历史记录，之后可以直接打开。
     var workdir: String?
+    /// 分区（Slurm 的 %P，PBS 的队列）和节点数（%D）：计费用。
+    var partition: String?
+    var nodes: Int?
+    /// 调度系统分配的资源（打开计费后才查询）。
+    var alloc: JobAlloc?
 
     /// 用于进度条的比例：数组用"已结束 / 总数"，其次真实进度，再其次"已运行 / 时间上限"。
     var fraction: Double? {
@@ -183,9 +188,82 @@ struct IslandEvent: Identifiable, Equatable {
     var subtitle: String
     var hostName: String
     var date = Date()
+    /// 手机推送用的详细信息（刘海和系统通知不用）。
+    var push: PushInfo?
 
-    init(kind: Kind, title: String, subtitle: String, hostName: String, hostID: UUID? = nil, jobID: String? = nil) {
+    init(kind: Kind, title: String, subtitle: String, hostName: String, hostID: UUID? = nil, jobID: String? = nil, push: PushInfo? = nil) {
         self.kind = kind; self.title = title; self.subtitle = subtitle; self.hostName = hostName; self.hostID = hostID; self.jobID = jobID
+        self.push = push
+    }
+}
+
+/// 任务提醒的细节：生成事件时已经知道的信息（不额外查询服务器）。查不到的项留空，推送时不显示那一行。
+struct PushInfo: Equatable {
+    /// 作业 / 进程 / 进度文件条目。
+    var source: RemoteJob.Source = .slurm
+    /// 显示用的编号（数组元素是 "#17"）。
+    var id: String?
+    var partition: String?
+    var nodeList: String?
+    var nodes: Int?
+    var cpus: Int?
+    var gpus: Int?
+    /// 调度系统给的原始状态（OUT_OF_MEMORY、TIMEOUT、CANCELLED by 123…）。
+    var state: String?
+    var exitCode: String?
+    var elapsed: TimeInterval?
+    /// 进程只知道"至少运行了多久"。
+    var elapsedAtLeast = false
+    var limit: TimeInterval?
+    var dir: String?
+    /// "GNEP 训练：200/200 epoch · loss 1.23e-2"
+    var app: String?
+    var appNote: String?
+    /// 进程最后一次采样："CPU 98% · 内存 12.3 GB · 显存 18.2 GB"
+    var sample: String?
+    var cost: String?
+    /// 数组的结果："98 个成功 · 2 个失败 / 共 100 个"
+    var array: String?
+    var failedElements: [String] = []
+    var note: String?
+    var watched = false
+
+    /// 从任务本身填好通用的几项。
+    init(job: RemoteJob) {
+        source = job.source
+        id = job.array?.baseID ?? job.id
+        partition = job.partition
+        nodes = job.alloc?.nodes ?? job.nodes
+        cpus = job.alloc?.cpus
+        gpus = job.alloc?.gpus
+        elapsed = job.elapsed
+        limit = job.limit
+        dir = job.workdir ?? job.app?.dir
+        watched = job.watched
+        if let app = job.app { setApp(app) }
+        if job.source == .process {
+            elapsedAtLeast = true
+            var parts: [String] = []
+            if let c = job.cpuPercent { parts.append("CPU \(Int(c.rounded()))%") }
+            if let m = job.memoryBytes, m > 0 { parts.append(L("内存 ", "mem ") + Format.bytes(m)) }
+            if let g = job.gpuMemoryMB, g > 0 { parts.append(L("显存 ", "GPU mem ") + Format.bytes(g * 1024 * 1024)) }
+            sample = parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
+    }
+
+    init() {}
+
+    mutating func setApp(_ app: AppProgress) {
+        let s = app.summary
+        self.app = app.title + (s.isEmpty ? "" : L("：", ": ") + s)
+        if dir == nil { dir = app.dir }
+    }
+
+    mutating func setAlloc(_ a: JobAlloc?) {
+        guard let a else { return }
+        if let n = a.nodes { nodes = n }
+        if let c = a.cpus { cpus = c }
+        if let g = a.gpus { gpus = g }
     }
 }
 

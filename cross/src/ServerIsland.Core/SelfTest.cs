@@ -243,7 +243,7 @@ public static class SelfTest
         Check(PendingReason.Explain("DependencyNeverSatisfied")?.NeedsAction == true
               && PendingReason.Explain("Dependency")?.Short == "等待依赖作业"
               && PendingReason.Explain("AssocGrpBillingRunMinutes")?.Short == "组计费额度已满"
-              && PendingReason.Explain("Job's QOS not permitted to use this partition (CPU-MISC allows rush-cpu)")?.NeedsAction == true,
+              && PendingReason.Explain("Job's QOS not permitted to use this partition (cpu-debug allows short-qos)")?.NeedsAction == true,
               "排队原因翻译");
         // sinfo -N -O 的 Gres / GresUsed：NVIDIA 的 gpu、曙光（海光）的 dcu；"dcu:0,gpu:0" 不算一种卡
         var parts = Partitions.Parse(RemoteScript.Parse(string.Join("\n",
@@ -268,6 +268,8 @@ public static class SelfTest
         SelfTestConnection.Run(Check);
         SelfTestPBS.Run(Check, hasBash);
         SelfTestMonitor.Run(Check);
+        SelfTestBilling.Run(Check, hasBash);
+        SelfTestPush.Run(Check);
 
         CrossPlatformChecks(hasBash);
 
@@ -436,6 +438,10 @@ public static class SelfTest
                 ("poll-slurm-cached.sh", RemoteScript.Build(slurm, new Dictionary<string, string> { ["/home/u/it's run"] = "1.2 3.4 ", ["/home/u/a"] = "/home/u/a/x.log 1 2 " }, includeDisk: false)),
                 ("poll-cluster.sh", RemoteScript.Build(cluster)),
                 ("poll-cluster-custom.sh", RemoteScript.Build(custom)),
+                ("poll-cluster-billing.sh", RemoteScript.Build(cluster, alloc: new(["1"], ["4821337", "8812300_16", "x;y"]))),
+                ("poll-cluster-custom-billing.sh", RemoteScript.Build(custom, alloc: new(["4821337", "8812300_16", "x;y"], ["2"]))),
+                ("poll-pbs-billing.sh", RemoteScript.Build(pbs, alloc: RemoteScript.AllocRequest.Empty)),
+                ("pbs-queues.sh", RemoteScript.PbsQueuesScript(pbs)),
             ];
         }
         finally { ProgressRule.Active = saved; }

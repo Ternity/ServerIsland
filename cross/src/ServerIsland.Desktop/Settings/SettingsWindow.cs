@@ -15,7 +15,7 @@ using static ServerIsland.Core.Lang;
 
 namespace ServerIsland.Desktop.Settings;
 
-public enum SettingsPageKind { General, Rules, Host }
+public enum SettingsPageKind { General, Rules, Billing, Push, Host, Display }
 
 /// 设置窗口：左侧栏是"通用""进度识别"和服务器列表，右侧是详情。（与 Swift 版 SettingsView.swift 对应）
 public sealed class SettingsWindow : Window
@@ -30,6 +30,8 @@ public sealed class SettingsWindow : Window
     readonly ScrollViewer _scroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
     Palette _p = Palette.For(ThemeVariant.Light);
     Action? _pageEngineUpdate;
+    /// 当前页面的订阅（副屏页订阅连接状态），换页或关窗时取消。
+    Action? _pageDetach;
     string _sidebarKey = "";
     AppLanguage _lang;
 
@@ -53,7 +55,7 @@ public sealed class SettingsWindow : Window
         Content = _root;
         ActualThemeVariantChanged += (_, _) => RebuildAll();
         _store.Changed += OnStoreChanged;
-        Closed += (_, _) => _store.Changed -= OnStoreChanged;
+        Closed += (_, _) => { _store.Changed -= OnStoreChanged; _pageDetach?.Invoke(); _pageDetach = null; };
         RebuildAll();
     }
 
@@ -99,10 +101,14 @@ public sealed class SettingsWindow : Window
         Dispatcher.UIThread.Post(() => _scroll.Offset = offset, DispatcherPriority.Loaded);
     }
 
+    /// 副屏连接状态变了：侧栏的副屏行跟着变。
+    public void SidebarChanged() => BuildSidebar();
+
     void BuildSidebar()
     {
         var hosts = _store.Settings.Hosts;
-        var key = $"{_kind}|{_hostID}|{_store.Settings.ProgressRules.Count}|" + string.Join(";", hosts.Select(h =>
+        var display = _engine.DisplayLink;
+        var key = $"{_kind}|{_hostID}|{_store.Settings.ProgressRules.Count}|{_store.Settings.UsbDisplay}|{_store.Settings.BillingEnabled}|{_store.Settings.PhonePush.Enabled}|{_store.Settings.PhonePush.Scope}|{_engine.PhonePush.HasKey}|{display?.Connected}|" + string.Join(";", hosts.Select(h =>
         {
             var s = _engine.Snapshots.GetValueOrDefault(h.Id);
             return $"{h.Id}|{h.DisplayName}|{h.Enabled}|{h.Paused}|{h.Muted}|{h.Kind}|{s?.Health}|{s?.RunningCount}|{s?.PendingCount}";
@@ -117,6 +123,17 @@ public sealed class SettingsWindow : Window
         list.Children.Add(SidebarRow(k, L("进度识别", "Progress Detection"),
             rules == 0 ? L("内置软件、自定义规则", "Built-in apps, custom rules") : L($"{rules} 条自定义规则", $"{rules} custom rules"),
             "wand", Color.Parse("#5856D6"), _kind == SettingsPageKind.Rules, () => Select(SettingsPageKind.Rules)));
+        list.Children.Add(SidebarRow(k, L("计费", "Billing"),
+            _store.Settings.BillingEnabled ? L("已开启 · 估算费用", "On · cost estimates") : L("按卡时估算花费", "Estimate GPU-hour costs"),
+            "card", Color.Parse("#F59E0B"), _kind == SettingsPageKind.Billing, () => Select(SettingsPageKind.Billing)));
+        var push = _store.Settings.PhonePush;
+        list.Children.Add(SidebarRow(k, L("手机推送", "Phone Push"),
+            push.Enabled && _engine.PhonePush.HasKey ? L("已开启 · ", "On · ") + push.Scope.ShortLabel() : L("任务结束推送到微信", "Job alerts to WeChat / WeCom"),
+            "phone", PhonePushPage.Tint, _kind == SettingsPageKind.Push, () => Select(SettingsPageKind.Push)));
+        // 外接副屏：只有在通用页底部打开以后才出现。
+        if (_store.Settings.UsbDisplay)
+            list.Children.Add(SidebarRow(k, L("副屏", "Display"), display?.Connected == true ? L("已连接", "Connected") : L("ESP32 小屏幕", "ESP32 screen"),
+                "display", Color.Parse("#14B8A6"), _kind == SettingsPageKind.Display, () => Select(SettingsPageKind.Display)));
         list.Children.Add(k.Text(L("服务器", "Servers"), 11.5, FontWeight.SemiBold, _p.Secondary).Margin2(10, 14, 0, 4));
         foreach (var h in hosts)
         {
@@ -282,9 +299,18 @@ public sealed class SettingsWindow : Window
     {
         var k = new SettingsKit(_p);
         _pageEngineUpdate = null;
+        _pageDetach?.Invoke();
+        _pageDetach = null;
         Control page;
+        // 关掉"外接副屏"时，副屏页从侧栏消失：回到通用页。
+        if (_kind == SettingsPageKind.Display && !_store.Settings.UsbDisplay) _kind = SettingsPageKind.General;
         switch (_kind)
         {
+            case SettingsPageKind.Display:
+                var dp = new DisplayPage(this, k, _store, _engine);
+                page = dp.Build();
+                _pageDetach = dp.Attach();
+                break;
             case SettingsPageKind.Host when _store.Host(_hostID) is { } host:
                 var hp = new HostPage(this, k, _store, _engine, _prompter, host);
                 page = hp.Build();
@@ -292,6 +318,14 @@ public sealed class SettingsWindow : Window
                 break;
             case SettingsPageKind.Rules:
                 page = new RulesPage(this, k, _store, _engine).Build();
+                break;
+            case SettingsPageKind.Billing:
+                page = new BillingPage(this, k, _store, _engine).Build();
+                break;
+            case SettingsPageKind.Push:
+                var pp = new PhonePushPage(this, k, _store, _engine);
+                page = pp.Build();
+                _pageDetach = pp.Attach();
                 break;
             default:
                 _kind = SettingsPageKind.General;

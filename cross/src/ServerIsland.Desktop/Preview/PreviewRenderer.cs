@@ -308,7 +308,8 @@ public static class PreviewRenderer
         foreach (var name in new[] { "bolt", "hourglass", "pause", "play", "bell", "bellSlash", "eye", "eyeFill", "history", "grid", "timer", "hand", "pin", "pinFill", "refresh", "gear",
                                      "chevronLeft", "chevronRight", "chevronDown", "chevronUp", "check", "xmark", "minus", "plus", "terminal", "copy", "search", "key", "wifiAlert",
                                      "moon", "atom", "stack", "chart", "lock", "warning", "warningFill", "info", "exclamation", "cpu", "drive", "star", "starFill", "server", "trash",
-                                     "question", "arrowDown", "wand", "globe", "box", "speaker", "speakerLow", "power", "folder", "pulse", "layout", "external", "pet", "display" })
+                                     "question", "arrowDown", "wand", "globe", "box", "speaker", "speakerLow", "power", "folder", "pulse", "layout", "external", "pet", "display",
+                                     "yen", "dollar", "euro", "pound", "card" })
         {
             icons.Children.Add(new StackPanel { Width = 74, Margin = new Thickness(4), Spacing = 4, Children =
             {
@@ -319,6 +320,54 @@ public static class PreviewRenderer
         var iw = new Window { Width = 800, Height = 420, Content = new Border { Background = Brushes.Black, Child = icons } };
         iw.Show();
         Save(iw, "icons");
+
+        // —— 计费：打开后头部多一个钱币按钮；费用页、详情页和历史页显示估算费用；设置里的计费页。其他截图保持关闭。——
+        {
+            store.Settings.BillingEnabled = true;
+            var now = DateTime.Now;
+            engine.Costs.ReplaceAll(DemoData.CostEntries(hpc.Id, now));
+            IslandPages.CostPreviewNow = now;
+            Save(IslandScene(IslandMode.Expanded, new IslandState { Hovering = true }), "island-expanded-billing");
+            st = new IslandState { Hovering = true };
+            st.Page = new IslandPage(PageKind.Costs);
+            Save(IslandScene(IslandMode.Expanded, st), "page-costs");
+            var costJob = hpcSnap.Jobs.First(j => j.Id == "8812044");
+            st = new IslandState { Hovering = true };
+            st.PinnedJob = costJob;
+            st.Page = new IslandPage(PageKind.Job, hpc.Id, costJob.Id);
+            st.PageState = new JobDetailState { Started = true, Detail = new JobDetail { Fields = [(L("状态", "State"), "RUNNING"), (L("分区", "Partition"), "cpu"),
+                (L("资源", "Resources"), "cpu=128,mem=480G,node=2")] } };
+            Save(IslandScene(IslandMode.Expanded, st), "page-detail-cost");
+            var costArray = hpcSnap.Jobs.First(j => j.Array != null);
+            st = new IslandState { Hovering = true };
+            st.Page = new IslandPage(PageKind.Job, hpc.Id, costArray.Id);
+            st.PageState = new JobDetailState { Started = true };
+            Save(IslandScene(IslandMode.Expanded, st), "page-detail-cost-array");
+            st = new IslandState { Hovering = true };
+            st.Page = new IslandPage(PageKind.History, hpc.Id);
+            st.PageState = new HistoryState
+            {
+                Started = true, FromServer = true,
+                Entries =
+                [
+                    new HistoryEntry { Id = "8811911", Name = "relax_Li3PS4_pbe", State = "COMPLETED", Elapsed = 7_560, EndedAt = now.AddMinutes(-30), ExitCode = "0:0" },
+                    new HistoryEntry { Id = "8811912", Name = "phonon_LiCoO2_222", State = "OUT_OF_MEMORY", Elapsed = 2_520, EndedAt = now.AddHours(-1.5), ExitCode = "0:125" },
+                    new HistoryEntry { Id = "8811914", Name = "gpumd_kappa_250K", State = "COMPLETED", Elapsed = 41_400, EndedAt = now.AddHours(-25), ExitCode = "0:0" },
+                    new HistoryEntry { Id = "8811901", Name = "neb_Li_vacancy", State = "CANCELLED by 1000", Elapsed = 412, EndedAt = now.AddHours(-8), ExitCode = "0:15" },
+                ],
+            };
+            Save(IslandScene(IslandMode.Expanded, st), "page-history-cost");
+            foreach (var variant in new[] { ThemeVariant.Light, ThemeVariant.Dark })
+            {
+                var bw = new SettingsWindow(store, engine, prompter) { RequestedThemeVariant = variant, Width = 900, Height = 1000 };
+                bw.Show();
+                bw.Select(SettingsPageKind.Billing);
+                Save(bw, "settings-billing" + (variant == ThemeVariant.Dark ? "-dark" : ""));
+                bw.Close();
+            }
+            store.Settings.BillingEnabled = false;
+            IslandPages.CostPreviewNow = null;
+        }
 
         // —— 设置窗口 ——
         foreach (var variant in new[] { ThemeVariant.Light, ThemeVariant.Dark })
@@ -332,6 +381,49 @@ public static class PreviewRenderer
             sw.Select(SettingsPageKind.Rules);
             Save(sw, "settings-rules" + suffix);
             sw.Close();
+        }
+        // 手机推送页：没填 key（深色）/ 已开启、Agent 打开（浅色、深色）
+        {
+            var ew = new SettingsWindow(store, engine, prompter) { RequestedThemeVariant = ThemeVariant.Dark, Width = 900, Height = 1000 };
+            ew.Show();
+            ew.Select(SettingsPageKind.Push);
+            Save(ew, "settings-push-empty-dark");
+            ew.Close();
+            engine.PhonePush.PreviewState("a1b2c3d4-0000-1111-2222-33334444f00d",
+                new PhonePush.PushStatus(DateTime.Now.AddMinutes(-2), true, L("测试消息已发送", "Test message sent")));
+            store.Settings.PhonePush.Enabled = true;
+            store.Settings.PhonePush.Agents = true;
+            var quiet = store.Settings.QuietHours;
+            store.Settings.QuietHours = true;
+            foreach (var variant in new[] { ThemeVariant.Light, ThemeVariant.Dark })
+            {
+                var w = new SettingsWindow(store, engine, prompter) { RequestedThemeVariant = variant, Width = 900, Height = 1500 };
+                w.Show();
+                w.Select(SettingsPageKind.Push);
+                Save(w, "settings-push" + (variant == ThemeVariant.Dark ? "-dark" : ""));
+                w.Close();
+            }
+            store.Settings.QuietHours = quiet;
+            store.Settings.PhonePush.Enabled = false;
+            store.Settings.PhonePush.Agents = false;
+            engine.PhonePush.PreviewState(null, null);
+        }
+        // 副屏页（没连板子时：板子设置和 Wi-Fi 表单是禁用的）
+        {
+            store.Settings.UsbDisplay = true;
+            store.Settings.WeatherCity = L("北京", "Beijing");
+            store.Settings.Deadlines = [new Deadline { Title = L("论文投稿", "Paper due"), Date = DateTime.Today.AddDays(12) }];
+            engine.DisplayLink ??= new DisplayLink(engine, store);
+            foreach (var variant in new[] { ThemeVariant.Light, ThemeVariant.Dark })
+            {
+                var dw = new SettingsWindow(store, engine, prompter, SettingsPageKind.Display) { RequestedThemeVariant = variant, Width = 900, Height = 2600 };
+                dw.Show();
+                Save(dw, "settings-display" + (variant == ThemeVariant.Dark ? "-dark" : ""));
+                dw.Close();
+            }
+            store.Settings.UsbDisplay = false;
+            store.Settings.WeatherCity = "";
+            store.Settings.Deadlines = [];
         }
         // 自动更新的几种状态（自查用）
         {

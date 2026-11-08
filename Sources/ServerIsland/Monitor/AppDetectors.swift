@@ -5,7 +5,7 @@ import Foundation
 /// 与任务列表在同一次 SSH 轮询中完成，只对任务的工作目录做 `tail -n 1` / `awk` 这类轻量读取。
 /// 新增软件时：在 `script` 里加一个分支输出 key=value，再在 `parse` 里解析即可。
 struct AppProgress: Equatable {
-    enum Kind: String { case nep, gnep, torchnep, mace, gpumd, vasp, lammps, custom }
+    enum Kind: String { case nep, gnep, torchnep, mace, deepmd, gpumd, vasp, lammps, custom }
     /// VASP 的计算类型。
     enum VaspMode: String { case md, relax, scf, neb }
 
@@ -54,6 +54,7 @@ struct AppProgress: Equatable {
         case .gnep: return L("GNEP 训练", "GNEP training")
         case .torchnep: return L("TorchNEP 训练", "TorchNEP training")
         case .mace: return L("MACE 训练", "MACE training")
+        case .deepmd: return L("DeePMD 训练", "DeePMD training")
         case .gpumd: return L("GPUMD 模拟", "GPUMD MD")
         case .vasp:
             switch vaspMode ?? .scf {
@@ -71,7 +72,7 @@ struct AppProgress: Equatable {
         switch kind {
         case .nep: return L("代", "gen")
         case .gnep, .torchnep, .mace: return "epoch"
-        case .gpumd, .lammps: return L("步", "steps")
+        case .gpumd, .lammps, .deepmd: return L("步", "steps")
         case .vasp:
             switch vaspMode ?? .scf {
             case .md: return L("步", "steps")
@@ -112,6 +113,9 @@ struct AppProgress: Equatable {
         switch kind {
         case .nep, .gnep, .torchnep, .mace:
             if let l = losses.first { parts.append("\(l.label) \(Self.sci(l.value))") }
+        case .deepmd:
+            // 损失已按 能量 → 力 排好（有验证集时先验证集），摘要显示前两项
+            for l in losses.prefix(2) { parts.append("\(l.label) \(Self.sci(l.value))") }
         case .gpumd, .lammps:
             if let r = rate { parts.append(Self.compact(r) + L(" 步/秒", " steps/s")) }
         case .vasp where vaspMode == .neb:
@@ -315,6 +319,20 @@ enum AppDetectors {
             [ -f "$r" ] && tail -n 1 "$r" | sed -n 's/.*"epoch": *\\([0-9][0-9]*\\).*/opt=\\1/p'
             tail -n 80 "$d/$ml" | grep -qa 'INFO: Training complete' && echo done=1
             echo "mtime=$(stat -c %Y "$d/$ml" "$r" 2>/dev/null | sort -n | tail -n 1)"
+          elif [ -f "$d/lcurve.out" ] && head -n 1 "$d/lcurve.out" | grep -qa '^#.*step'; then
+            printf '\(marker)DIR %s|%s\\n' "$id" "$d"; echo kind=deepmd
+            lg=$(cd "$d" 2>/dev/null && ls -td -- log *.log *.out 2>/dev/null | grep -vx 'lcurve\\.out' | head -n 5)
+            sg=$( { echo lcurve.out; printf '%s\\n' "$lg"; } | while IFS= read -r x; do [ -n "$x" ] && stat -c '%Y.%s' -- "$d/$x" 2>/dev/null; done | tr '\\n' ' ')
+            if si_same "$d" "$sg"; then echo same=1; else echo "sig=$sg"
+            echo "hdr=$(head -n 1 "$d/lcurve.out" | cut -c1-400)"
+            echo "last=$(tail -n 8 "$d/lcurve.out" | grep -v '^[[:space:]]*#' | tail -n 1 | cut -c1-400)"
+            printf '%s\\n' "$lg" | while IFS= read -r x; do [ -f "$d/$x" ] || continue
+              s=$(head -c 3000000 "$d/$x" | grep -ao -m 1 'Start to train [0-9]* steps' | tr -dc '0-9'); t=$(tail -n 40 "$d/$x")
+              if [ -n "$s" ] || printf '%s\\n' "$t" | grep -qa 'DEEPMD'; then [ -n "$s" ] && echo "logsteps=$s"
+                printf '%s\\n' "$t" | grep -qa 'Trained model has been saved to\\|average training time' && echo done=1; break; fi
+            done
+            cat "$d/input.json" "$d/out.json" 2>/dev/null | grep -ao '"\\(numb_steps\\|num_steps\\|stop_batch\\)"[[:space:]]*:[[:space:]]*[0-9]*' | head -n 1 | sed 's/.*:[[:space:]]*/steps=/'
+            echo "mtime=$(stat -c %Y "$d/lcurve.out" 2>/dev/null)"; fi
           elif [ -f "$d/run.in" ] && { [ -f "$d/neighbor.out" ] || [ -f "$d/thermo.out" ]; }; then
             printf '\(marker)DIR %s|%s\\n' "$id" "$d"; echo kind=gpumd
             sg=$(stat -c '%Y.%s' "$d/run.in" "$d/neighbor.out" "$d/thermo.out" 2>/dev/null | tr '\\n' ' ')
@@ -432,6 +450,25 @@ enum AppDetectors {
                 p.current = done ?? 0
                 p.losses = m?.values ?? []
                 if let t = p.total, let c = p.current, c > t { return }
+            case .deepmd:
+                // 目标：日志里 "Start to train N steps"（num_epochs 换算后的实际步数）优先，其次输入 JSON 的 numb_steps
+                p.total = (kv["logsteps"] ?? kv["steps"]).flatMap(Double.init).flatMap { $0 > 0 ? $0 : nil }
+                p.hasTarget = p.total != nil
+                p.dataFile = "lcurve.out"
+                let names = deepmdLabels(kv["hdr"] ?? "")
+                let cols = (kv["last"] ?? "").split(separator: " ").map(String.init)
+                guard cols.count >= 2, cols.count == names.count, let step = Double(cols[0]) else { return }
+                p.current = step
+                if let t = p.total, step > t { return }
+                var values: [AppProgress.Value] = []
+                for (i, c) in cols.enumerated().dropFirst() {
+                    // 没有验证集时是 nan，不显示
+                    if let v = Double(c), v.isFinite { values.append(.init(label: names[i], value: v)) }
+                }
+                p.losses = values.enumerated().sorted { a, b in
+                    let ra = deepmdRank(a.element.label), rb = deepmdRank(b.element.label)
+                    return ra != rb ? ra < rb : a.offset < b.offset
+                }.map(\.element)
             case .gpumd:
                 p.total = kv["total"].flatMap(Double.init)
                 p.hasTarget = p.total != nil
@@ -577,6 +614,27 @@ enum AppDetectors {
             if name.hasPrefix("rmse_") { name = String(name.dropFirst(5)); name = short[name] ?? name }
             return name + unit
         }
+    }
+
+    /// DeePMD lcurve.out 的表头 → 每列的名字（含第一列 step）：
+    /// `rmse_e_val` → `RMSE E val`，`mae_f_trn` → `MAE F trn`，`rmse_val` → `RMSE val`，多任务的 `rmse_e_val_water` → `RMSE E val water`。
+    static func deepmdLabels(_ header: String) -> [String] {
+        header.split(separator: " ").filter { $0 != "#" }.map { t -> String in
+            var name = String(t)
+            if name.hasPrefix("#") { name.removeFirst() }
+            let parts = name.split(separator: "_").map(String.init)
+            guard let m = parts.first, m == "rmse" || m == "mae" else { return name }
+            return parts.map { ["rmse", "mae", "e", "f", "v"].contains($0) ? $0.uppercased() : $0 }.joined(separator: " ")
+        }
+    }
+
+    /// 摘要和详情里的顺序：验证集在前，能量 → 力 → 维里 → 总误差，学习率最后。
+    static func deepmdRank(_ label: String) -> Int {
+        let w = label.split(separator: " ").map(String.init)
+        if label == "lr" { return 99 }
+        let split = w.contains("val") ? 0 : w.contains("trn") ? 10 : 20
+        let q = w.contains("E") ? 0 : w.contains("F") ? 1 : w.contains("V") ? 2 : 3
+        return split + q
     }
 
     /// MACE 训练日志里的一行验证集误差：

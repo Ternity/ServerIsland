@@ -12,6 +12,14 @@ static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // 作为 AI 编程工具的钩子被调用：记一条会话事件就退出（见 AgentMonitor.cs）。不打印任何东西，越快越好。
+        //   ServerIsland --agent-event claude|opencode [事件 JSON；不给就从标准输入读]
+        if (Index(args, "--agent-event") is { } ae && ae + 1 < args.Length)
+        {
+            AgentEvents.Record(args[ae + 1], ae + 2 < args.Length ? args[ae + 2] : null);
+            return 0;
+        }
+
         // 作为 ssh 的 SSH_ASKPASS 被调用（Linux 上用系统 ssh 登录时）：弹出密码框，结果写到 stdout。
         if (Environment.GetEnvironmentVariable(OpenSshTransport.AskPassFlag) == "1")
         {
@@ -19,7 +27,7 @@ static class Program
             return AskPassApp.Run(args);
         }
 
-        bool cli = args.Any(a => a is "--selftest" or "--render-preview" or "--diagnose" or "--dump-scripts" or "--check-update" or "--curve" or "--version" or "--help" or "--ui-smoke");
+        bool cli = args.Any(a => a is "--ai-usage" or "--selftest" or "--render-preview" or "--diagnose" or "--dump-scripts" or "--check-update" or "--curve" or "--version" or "--help" or "--ui-smoke" or "--push-preview");
         AppDomain.CurrentDomain.UnhandledException += (_, e) => DebugLog.Log("未处理的异常：" + e.ExceptionObject);
         TaskScheduler.UnobservedTaskException += (_, e) => { DebugLog.Log("后台任务异常：" + e.Exception); e.SetObserved(); };
         if (cli) AttachConsoleIfAny();
@@ -34,8 +42,32 @@ static class Program
                   --diagnose <别名> [slurm|pbs|direct|slurm+]   对真实服务器跑一次完整采集并打印
                   --render-preview <目录> [zh|en]  把各个界面渲染成 PNG（演示数据）
                   --dump-scripts <目录>          导出生成的远端脚本（和 Swift 版对比用）
+                  --push-preview [zh|en]         打印手机推送的示例消息（不联网）
                   --ui-smoke <目录>              用演示数据在真实窗口上走一遍界面并截图（自查用）
+                  --ai-usage                     读一次 CC Switch 的 AI 用量并打印（只读，开发用）
+                  --agent-event claude|opencode  AI 编程工具的钩子入口（由钩子调用，不要手动运行）
                 """);
+            return 0;
+        }
+
+        // 开发用：读一次 CC Switch 的 AI 用量，打印发给副屏的 JSON（只读）。
+        if (args.Contains("--ai-usage"))
+        {
+            if (AIUsage.Snapshot() is not { } msg) { Console.WriteLine("没有找到 CC Switch 的数据库：" + AIUsage.DatabasePath); return 1; }
+            Console.WriteLine(msg.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+            return 0;
+        }
+
+        // 开发用：打印手机推送的示例消息（不联网）。
+        if (Index(args, "--push-preview") is { } pi)
+        {
+            Lang.Setting = pi + 1 < args.Length && args[pi + 1] == "en" ? AppLanguage.En : AppLanguage.Zh;
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+            var samples = PhonePush.Samples();
+            var items = samples.Select(s => PhonePush.ItemFor(s.Event, s.Host, true)).ToList();
+            foreach (var it in items) Console.WriteLine(it.Text + "\n");
+            Console.WriteLine("—— " + Lang.L("简洁", "Brief") + " ——\n" + PhonePush.ItemFor(samples[0].Event, samples[0].Host, false).Text + "\n");
+            Console.WriteLine("—— " + Lang.L("合并", "Merged") + " ——\n" + PhonePush.Merged(items, samples.Select(s => s.Host).ToList()));
             return 0;
         }
 

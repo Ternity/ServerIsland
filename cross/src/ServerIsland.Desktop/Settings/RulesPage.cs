@@ -21,6 +21,7 @@ public sealed class RulesPage(SettingsWindow window, SettingsKit k, ConfigStore 
             Builtin("NEP / GNEP", "loss.out + nep.in / gnep.in", L("代数 / epoch，目标取自 nep.in / gnep.in", "Generation / epoch; target from nep.in / gnep.in")),
             Builtin("TorchNEP", "loss.out + output.log", L("epoch，目标取自 output.log / nep.in；loss.out 可以在 output/ 等子目录里", "Epochs; target from output.log / nep.in; loss.out may be in a subfolder such as output/")),
             Builtin("MACE", "logs/*.log", L("epoch，目标是 max_num_epochs（取自 _debug.log）", "Epochs; target is max_num_epochs (from _debug.log)")),
+            Builtin("DeePMD", "lcurve.out", L("步数，目标取自日志的 Start to train N steps 或输入 JSON 的 numb_steps", "Steps; target from \"Start to train N steps\" in the log or numb_steps in the input JSON")),
             Builtin("GPUMD", "run.in + neighbor.out / thermo.out", L("步数，目标是 run.in 里所有 run 之和", "Steps; target is the sum of run in run.in")),
             Builtin("VASP", "INCAR + OSZICAR", L("MD 显示百分比；结构优化显示离子步，单点显示电子步", "MD shows a percentage; relaxation shows ionic steps, SCF shows electronic steps")),
             Builtin("LAMMPS", "log.lammps", L("最后一段 run 的步数；minimize 等不常见写法不显示", "Steps of the last run; minimize and unusual setups are skipped")),

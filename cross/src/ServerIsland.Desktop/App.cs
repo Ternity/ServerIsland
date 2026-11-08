@@ -65,11 +65,25 @@ public sealed class App : Application
 
         _island = new IslandWindow(_engine, _store, _prompter);
         _island.State.OpenSettings = () => { _island.SetHovering(false); ShowSettings(); };
+        _island.State.OpenSettingsPage = page =>
+        {
+            _island.SetHovering(false);
+            ShowSettings();
+            if (page == "billing") _settings?.Select(SettingsPageKind.Billing);
+        };
         _tray = new TrayController(this, _engine, _store);
 
         _engine.Changed += OnEngineChanged;
         _store.Changed += OnStoreChanged;
         ApplyDisplayMode();
+        // 外接副屏：没打开"外接副屏"时只是空转（每 3 秒看一眼设置）。
+        _engine.DisplayLink = new DisplayLink(_engine, _store) { IsLocked = LockState.IsLocked };
+#if WINDOWS
+        // Windows 上可以走蓝牙（第一次配对时弹框输入副屏上的 6 位码）。
+        _engine.DisplayLink.BleFactory = () => new WinBle(() => Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            PromptDialog.Ask(L("ServerIsland 副屏", "ServerIsland Display"), L("输入副屏上显示的 6 位配对码", "Enter the 6-digit code shown on the display"), false)));
+#endif
+        _engine.DisplayLink.Start();
         _engine.Start();
         desktop.Exit += (_, _) => _store.SaveNow();
 

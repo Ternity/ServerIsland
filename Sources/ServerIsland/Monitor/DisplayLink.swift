@@ -29,12 +29,16 @@ final class DisplayLink: ObservableObject {
     @Published private(set) var board: [String: Int] = [:]
     @Published private(set) var network: [String: String] = [:]
     private var networkClients: Int?
+    /// 板子的电量（固件 0.4.1 起才有）：百分比（-1 = 没有电池读数）、是否在充电、是否插着电。
+    struct Battery: Equatable { var percent: Int; var charging: Bool; var usb: Bool }
+    @Published private(set) var battery: Battery?
     private var lockObservers: [NSObjectProtocol] = []
     private var macLocked = false
     private var screenSleeping = false
     private var scanTimer: Timer?
     private var heartbeat: Timer?
     private var aiTimer: Timer?
+    private var aiReading = false
     private var slowTimer: Timer?
     /// AI 编程工具的会话（Claude Code / Codex / OpenCode）。
     let agents = AgentMonitor()
@@ -67,8 +71,8 @@ final class DisplayLink: ObservableObject {
         heartbeat = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.sendSnapshot() }
         }
-        // AI 用量变化慢，一分钟读一次就够了。
-        aiTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        // 用量只供参考，三分钟读一次；避免重连时重复统计。
+        aiTimer = Timer.scheduledTimer(withTimeInterval: 180, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.sendAIUsage() }
         }
         // Agents 列表（里面有"多久之前"）和任务历史：半分钟发一次。
@@ -120,9 +124,22 @@ final class DisplayLink: ObservableObject {
             }
             .store(in: &cancellables)
         agents.onChange = { [weak self] in self?.sendAgents() }
-        agents.onAlert = { [weak self] s in self?.sendAgentAlert(s) }
-        agents.start()
+        agents.onAlert = { [weak self] s in
+            self?.sendAgentAlert(s)
+            self?.engine.phonePush.agent(s)
+        }
+        // 手机推送要 Agent 提醒时，副屏没连着也要读会话。
+        store.$settings.map(\.phonePush.wantsAgents).removeDuplicates()
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.updateAgentMonitor() } }
+            }
+            .store(in: &cancellables)
         scan()
+    }
+
+    /// Agent 状态给副屏和手机推送用：两边都不需要时不读。
+    private func updateAgentMonitor() {
+        if linked || store.settings.phonePush.wantsAgents { agents.start() } else { agents.stop() }
     }
 
     /// 由 MonitorEngine.emit 调用（静音的服务器在那之前就被过滤掉了）。
@@ -235,11 +252,13 @@ final class DisplayLink: ObservableObject {
         guard now != transport else { return }
         transport = now
         linked = now != nil
+        updateAgentMonitor()
         guard now != nil else {
             DebugLog.log("副屏：断开")
             firmware = nil
             board = [:]
             network = [:]
+            battery = nil
             return
         }
         DebugLog.log("副屏：通过\(now == .usb ? "USB" : "蓝牙")连接（固件 \(firmware ?? "?")）")
@@ -266,6 +285,11 @@ final class DisplayLink: ObservableObject {
                 DebugLog.log("副屏 Wi-Fi：\(next["state"] ?? "?")\((next["error"] ?? "").isEmpty ? "" : "（\(next["error"]!)）")\((next["ap_ip"] ?? "").isEmpty ? "" : "，热点已开")")
             }
             network = next
+            return
+        }
+        if obj["t"] as? String == "battery", linked {
+            battery = Battery(percent: (obj["pct"] as? NSNumber)?.intValue ?? -1,
+                              charging: obj["charging"] as? Bool ?? false, usb: obj["usb"] as? Bool ?? false)
             return
         }
         if obj["t"] as? String == "settings", linked {
@@ -356,10 +380,14 @@ final class DisplayLink: ObservableObject {
 
     /// AI 用量（CC Switch 的数据库）：装了 CC Switch 就自动发，不用设置。在后台线程里读，读完回主线程发。
     private func sendAIUsage() {
-        guard linked, AIUsage.available else { return }
-        Task.detached(priority: .utility) {
-            guard let msg = AIUsage.snapshot() else { return }
-            await MainActor.run { [weak self] in self?.write(msg) }
+        guard linked, !aiReading, AIUsage.available else { return }
+        aiReading = true
+        Task.detached(priority: .utility) { [self] in
+            let msg = AIUsage.snapshot()
+            await MainActor.run {
+                self.aiReading = false
+                if self.linked, let msg { self.write(msg) }
+            }
         }
     }
 
@@ -380,8 +408,10 @@ final class DisplayLink: ObservableObject {
         guard linked else { return }
         let now = Date()
         let list: [[String: Any]] = agents.list.prefix(10).map { s in
-            ["tool": s.tool, "proj": Self.project(s.cwd), "title": s.title, "state": s.state.rawValue, "msg": s.message,
-             "ago": Int(now.timeIntervalSince(s.changedAt))]
+            var o: [String: Any] = ["tool": s.tool, "proj": Self.project(s.cwd), "title": s.title, "state": s.state.rawValue, "msg": s.message,
+                                    "ago": Int(now.timeIntervalSince(s.changedAt))]
+            if s.plan.total > 0 { o["todo"] = ["done": s.plan.done, "total": s.plan.total, "now": s.plan.now] }
+            return o
         }
         write(["t": "agents", "list": list])
     }
@@ -398,7 +428,7 @@ final class DisplayLink: ObservableObject {
         default: kind = "agent_done"; title = L("\(name) 回答完了", "\(name) is done"); detail = s.title
         }
         let sub = [proj, detail].filter { !$0.isEmpty }.joined(separator: " · ")
-        write(["t": "event", "kind": kind, "title": title, "sub": sub, "host": ""])
+        write(["t": "event", "kind": kind, "title": title, "sub": sub, "host": "", "tool": s.tool])
         sendAgents()
     }
 
@@ -416,6 +446,7 @@ final class DisplayLink: ObservableObject {
                                     "state": e.state == HistoryEntry.endedUnknown ? "other" : e.jobState.rawValue,
                                     "ago": Int(now.timeIntervalSince(e.endedAt))]
             if let el = e.elapsed { o["el"] = Int(el) }
+            if engine.billingActive(host), let c = engine.costs.cost(host: host.id, id: e.id) { o["cost"] = Self.cents(c) }
             return o
         }
         write(["t": "history", "list": list])
@@ -465,7 +496,17 @@ final class DisplayLink: ObservableObject {
             let jobs = MonitorEngine.starredFirst(snap.jobs) { starred.contains($0.id) }
             // 已运行 / 剩余时间是采样时刻的值，按距采样过去的时间修正。
             let age = snap.lastUpdate.map { max(0, now.timeIntervalSince($0)) } ?? 0
-            h["jobs"] = jobs.prefix(maxJobs).map { job(job: $0, age: age, starred: starred.contains($0.id)) }
+            // 计费：每个任务已花多少（cs）、每小时多少（cr），整台机器每小时多少（cr）。
+            h["jobs"] = jobs.prefix(maxJobs).map { j -> [String: Any] in
+                var o = job(job: j, age: age, starred: starred.contains(j.id))
+                if let c = engine.liveCost(host, j) {
+                    o["cs"] = cents(c.spent + c.perHour * age / 3600)
+                    if c.perHour > 0 { o["cr"] = cents(c.perHour) }
+                }
+                return o
+            }
+            let rate = jobs.reduce(0) { $0 + (engine.liveCost(host, $1)?.perHour ?? 0) }
+            if rate > 0 { h["cr"] = cents(rate) }
             h["njobs"] = jobs.count
             hosts.append(h)
         }
@@ -479,9 +520,54 @@ final class DisplayLink: ObservableObject {
         case .worried: mood = "worried"
         }
         // now / tz：副屏的时钟用电脑的时间（UTC 秒 + 时区偏移秒）。
-        return ["t": "snap", "lang": Lang.isEnglish ? "en" : "zh", "mood": mood,
+        var message: [String: Any] = ["t": "snap", "lang": Lang.isEnglish ? "en" : "zh", "mood": mood,
                 "run": engine.totalRunning, "pend": engine.totalPending, "hosts": hosts,
                 "now": Int(now.timeIntervalSince1970), "tz": TimeZone.current.secondsFromGMT(for: now)]
+        // 计费打开时：今天 / 本月 / 上月已结束任务的费用、正在运行的每小时费用（都是估算）。
+        if store.settings.billingEnabled {
+            let s = CostSummary(engine.costEntriesWithRunning(), now: now)
+            message["cost"] = ["cur": store.settings.currency, "today": cents(s.today), "month": cents(s.month),
+                               "last": cents(s.lastMonth), "rate": cents(engine.totalBurnRate)]
+        }
+        return fitSnapshot(message)
+    }
+
+    /// 金额保留两位小数（JSON 里是数字）。
+    static func cents(_ v: Double) -> Double { (v * 100).rounded() / 100 }
+
+    /// 按 UTF-8 编码后的大小留足接收余量；关注任务最后才裁掉。
+    static func fitSnapshot(_ message: [String: Any], limit: Int = 30 * 1024) -> [String: Any] {
+        var result = message
+        var hosts = result["hosts"] as? [[String: Any]] ?? []
+        func fits() -> Bool {
+            result["hosts"] = hosts
+            return (encode(result)?.count ?? Int.max) <= limit
+        }
+        if fits() { return result }
+        for i in hosts.indices {
+            var jobs = hosts[i]["jobs"] as? [[String: Any]] ?? []
+            for j in jobs.indices {
+                for key in ["detail", "msg", "dir", "app"] { jobs[j][key] = nil }
+            }
+            hosts[i]["jobs"] = jobs
+        }
+        while !fits(), !hosts.isEmpty {
+            var removed = false
+            for starred in [false, true] {
+                for i in hosts.indices.reversed() {
+                    var jobs = hosts[i]["jobs"] as? [[String: Any]] ?? []
+                    if let j = jobs.lastIndex(where: { ($0["star"] as? Bool ?? false) == starred }) {
+                        jobs.remove(at: j)
+                        hosts[i]["jobs"] = jobs
+                        removed = true
+                        break
+                    }
+                }
+                if removed { break }
+            }
+            if !removed { hosts.removeLast() }
+        }
+        return result
     }
 
     /// 详情页的文字字段截短，免得一条 snap 太大（副屏的接收缓冲是 32KB）。

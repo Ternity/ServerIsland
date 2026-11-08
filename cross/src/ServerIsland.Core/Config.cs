@@ -52,6 +52,19 @@ public static class EnumLabels
 
     public static string Label(this AlertScope a) => a == AlertScope.All ? L("全部任务", "All Jobs") : L("只提醒关注的任务", "Starred Jobs Only");
 
+    public static string Label(this PushScope s) => s switch
+    {
+        PushScope.Starred => L("只推送关注（⭐）的任务", "Starred Jobs Only"),
+        PushScope.All => L("全部任务", "All Jobs"),
+        _ => L("和刘海提醒一样", "Same as Island Alerts"),
+    };
+    public static string ShortLabel(this PushScope s) => s switch
+    {
+        PushScope.Starred => L("关注的任务", "starred jobs"),
+        PushScope.All => L("全部任务", "all jobs"),
+        _ => L("同刘海提醒", "as island alerts"),
+    };
+
     public static string Label(this KeepAlive k) => k switch
     {
         KeepAlive.H8 => L("8 小时", "8 hours"),
@@ -104,7 +117,9 @@ public sealed class CommandSet : IJsonOnDeserialized
     public string Preamble { get; set; } = "";
     public string Squeue { get; set; } = "squeue -u \"$(id -un)\" -h -o '%i|%j|%T|%M|%l|%D|%R|%P|%F|%K'";
     /// `{jobs}` 会被替换为逗号分隔的作业号。只在作业从队列消失时调用一次。
-    public string Sacct { get; set; } = "sacct -n -X -P -o JobID,JobName,State,Elapsed,ExitCode -j {jobs}";
+    /// 最后一列 AllocTRES 是作业分到的资源（计费用）；没有这一列也能解析。
+    public string Sacct { get; set; } = "sacct -n -X -P -o JobID,JobName,State,Elapsed,ExitCode,AllocTRES -j {jobs}";
+    public const string OldSacct = "sacct -n -X -P -o JobID,JobName,State,Elapsed,ExitCode -j {jobs}";
     public string Gpu { get; set; } = "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits";
     public string GpuApps { get; set; } = "nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits";
     public string Processes { get; set; } = "ps -u \"$(id -un)\" -o pid=,etimes=,pcpu=,rss=,args= --sort=-pcpu | head -n 300";
@@ -119,6 +134,8 @@ public sealed class CommandSet : IJsonOnDeserialized
     {
         // 旧版默认命令没有数组列（%F|%K），自动升级。
         if (Squeue == OldSqueue) Squeue = Defaults.Squeue;
+        // 旧版默认命令没有 AllocTRES（计费用），自动升级。
+        if (Sacct == OldSacct) Sacct = Defaults.Sacct;
     }
 }
 
@@ -179,6 +196,8 @@ public sealed class HostConfig : IJsonOnDeserialized
     public bool RememberPassword { get; set; }
     /// 只看这些目录下的任务（每行一个，可用 ~）。作业按工作目录、进程按当前目录判断；空表示不过滤。
     public string PathFilter { get; set; } = "";
+    /// 各分区的单价（计费）；分区名为空的一行是"其他分区"。
+    public List<PartitionPrice> Prices { get; set; } = [];
 
     /// 过滤目录列表（去掉空行）。
     [JsonIgnore]
@@ -204,6 +223,7 @@ public sealed class HostConfig : IJsonOnDeserialized
         Commands ??= new CommandSet();
         Watched ??= [];
         HostName ??= ""; User ??= ""; IdentityFile ??= ""; PathFilter ??= "";
+        Prices ??= [];
     }
 
     public HostConfig Clone() => Json.Clone(this);
@@ -248,6 +268,26 @@ public sealed class AppSettings
     public bool QuietHours { get; set; }
     public int QuietStart { get; set; } = 23 * 60;
     public int QuietEnd { get; set; } = 8 * 60;
+
+    /// 外接副屏（ESP32 固件，暂不进仓库）。默认关：不知道有这块板子的用户看不到任何相关设置。
+    /// 打开后设置窗口侧栏多一个"副屏"页面，插上 USB 就自动连接并推送状态。
+    public bool UsbDisplay { get; set; }
+    /// 也通过蓝牙连接（插着 USB 时仍然优先用 USB）。
+    public bool DisplayBluetooth { get; set; }
+    /// 电脑锁屏时副屏一起熄屏。
+    public bool DisplayLockSync { get; set; } = true;
+    /// 副屏的日历页显示系统日历里的日程（只有 Mac 版能读系统日历；这里只保留这个键，配置文件两边通用）。
+    public bool DisplayCalendar { get; set; }
+    /// 截止日期倒计时（副屏的时钟和日历上显示）。
+    public List<Deadline> Deadlines { get; set; } = [];
+    /// 副屏上显示天气的城市（空 = 不显示；数据来自 Open-Meteo）。
+    public string WeatherCity { get; set; } = "";
+    /// 计费（估算费用），默认关闭。单价在各服务器的 `Prices` 里。
+    public bool BillingEnabled { get; set; }
+    /// 货币符号。
+    public string Currency { get; set; } = "¥";
+    /// 手机推送（企业微信群机器人）。key 只存凭据库，不在这里。
+    public PhonePushSettings PhonePush { get; set; } = new();
 
     // —— 只有 Windows / Linux 版用到的设置 ——
     public DisplayMode DisplayMode { get; set; } = DisplayMode.Island;
@@ -302,8 +342,46 @@ public sealed class StarredJob
     public DateTime? Since { get; set; } = DateTime.Now;
 }
 
+/// 一个截止日期（副屏上倒计时）。
+public sealed class Deadline
+{
+    [JsonConverter(typeof(UpperGuidConverter))]
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Title { get; set; } = "";
+    [JsonConverter(typeof(ReferenceDateConverter))]
+    public DateTime? Date { get; set; } = DateTime.Now;
+}
+
 /// 存储的值 all / starred 和 Mac 版一致。
 public enum AlertScope { All, Starred }
+
+/// 手机推送的设置（和 Mac 版 PhonePushSettings 一致）。默认只推送关注（⭐）的任务：平时人在电脑前看刘海就够了，要离开时给重要的任务点个星。
+public sealed class PhonePushSettings
+{
+    public bool Enabled { get; set; }
+    public PushScope Scope { get; set; } = PushScope.Starred;
+    public bool Started { get; set; }
+    public bool Finished { get; set; } = true;
+    public bool Failed { get; set; } = true;
+    public bool Unknown { get; set; } = true;
+    /// 磁盘快满等服务器级提醒。
+    public bool ServerWarnings { get; set; } = true;
+    /// Claude Code / Codex / OpenCode。
+    public bool Agents { get; set; }
+    public bool AgentAttention { get; set; } = true;
+    public bool AgentDone { get; set; } = true;
+    /// 详细：资源、用时、目录、软件进度、费用……；简洁：只有标题和服务器。
+    public bool Detailed { get; set; } = true;
+    /// 勿扰时段（通用页设置的时间）里不推送。
+    public bool FollowQuietHours { get; set; } = true;
+    /// 勿扰时段里失败的任务照常推送。
+    public bool FailuresDuringQuiet { get; set; } = true;
+
+    /// 需要读取 Agent 会话（副屏没连着时也要读）。
+    [JsonIgnore] public bool WantsAgents => Enabled && Agents && (AgentAttention || AgentDone);
+}
+
+public enum PushScope { Starred, All, Island }
 
 public static class Json
 {

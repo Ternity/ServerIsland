@@ -97,6 +97,17 @@ SwiftUI（IslandRootView、SettingsView），通过 @ObservedObject 订阅 engin
 - `fetchPartitions`（`Partitions.swift`）：`sinfo` 按节点逐个汇总到分区，统计空闲加速卡（GPU / DCU 等）和 CPU；结果缓存 60 秒。
 - `topProcesses`、`watch/unwatch`、`toggleMute`、`setPaused`、`setHostInterval`、`setGlobalInterval`、`setAutoRefresh`、`setKind`、`login`、`checkEnvironment`。
 
+## 计费（`Models/Billing.swift`、`Monitor/MonitorEngine+Billing.swift`，2026-11-05）
+
+- 设置：`AppSettings.billingEnabled`（默认关）、`currency`；每台服务器的 `HostConfig.prices`（`PartitionPrice`：分区、计价方式、单价、说明）。只算 Slurm / PBS（直连服务器没有调度系统的分配记录）。
+- `billingActive(host)`：打开了计费、是调度系统、至少一个分区单价 > 0。不满足时 `allocQuery` 返回 nil，远端脚本不多任何东西。
+- 轮询：`allocQuery` 给出已经知道资源的作业（`known`，默认 squeue 时脚本在同一轮里查新出现的运行中作业）和上一轮看到、还没查的作业（`query`，自定义 squeue 时用）→ `RemoteScript.build(alloc:)` 多一段 `alloc` → `build` 把结果合进 `allocCache` 并挂到 `RemoteJob.alloc` 上；任务列表读全后清掉已经不在的作业。`RemoteJob` 还多了 `partition`、`nodes`（来自 squeue），`HistoryStore.ActiveJob` 一起存下来。
+- 记账：`recordCost` 在作业结束的地方调用（`detectEvents` 的 Slurm / PBS 作业、`handleArrays` 的每个元素、`recordEndedWhileAway` 的非数组作业），资源和时长优先用 sacct / `qstat -x` 的最终值。账本 `CostLedger`（`cost-ledger.json`）。
+- 汇总：`costEntriesWithRunning` = 账本 + 正在跑的任务"到上次刷新为止"的费用（不写进账本），所以今天 / 本月 / 每天跟着每次刷新更新；`CostSummary` 按每条记录实际运行的时间段摊到各天各月（跨零点的任务两天各算一部分）。
+- 显示：`liveCost`（运行中：已花多少、每小时多少；数组 = 已结束元素的账 + 运行中元素）、`totalBurnRate`。刘海头部的钱币按钮（打开计费才有）→ 费用页（`CostSummary`：今天 / 本月 / 上月、本月每天、按服务器和分区、最贵的作业）；详情页多一行"费用"；历史页每行和标题显示费用。设置侧栏的"计费"页填单价、读取分区。
+- 费用页底部和设置页都写明"估算，实际以服务器供应商的账单为准"（`Billing.disclaimer`）。
+- 自检 `SelfTestBilling`；`--diagnose <别名> slurm` 末尾用临时单价只读地走一遍（不改设置、不写账本）。
+
 ## 刘海窗口（`Notch/IslandController.swift`）
 
 - 一个固定大小的 `NSPanel`（`IslandLayout.panelSize`，比最大展开状态还大），放在 `.statusBar + 8` 层，`canJoinAllSpaces`。

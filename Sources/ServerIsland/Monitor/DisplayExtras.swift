@@ -94,7 +94,7 @@ final class DisplayExtras {
             DebugLog.log("天气：找不到城市 \(city)")
             return nil
         }
-        guard let url = URL(string: "https://api.open-meteo.com/v1/forecast?latitude=\(lat)&longitude=\(lon)&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1"),
+        guard let url = URL(string: "https://api.open-meteo.com/v1/forecast?latitude=\(lat)&longitude=\(lon)&current=temperature_2m,weather_code&hourly=precipitation_probability,weather_code&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1"),
               let (d, _) = try? await URLSession.shared.data(from: url),
               let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
               let cur = obj["current"] as? [String: Any], let daily = obj["daily"] as? [String: Any] else {
@@ -102,11 +102,33 @@ final class DisplayExtras {
             return nil
         }
         let code = cur["weather_code"] as? Int ?? -1
-        return ["t": "weather", "city": place["name"] as? String ?? city,
-                "temp": Int(((cur["temperature_2m"] as? Double) ?? 0).rounded()),
-                "max": Int((((daily["temperature_2m_max"] as? [Double])?.first) ?? 0).rounded()),
-                "min": Int((((daily["temperature_2m_min"] as? [Double])?.first) ?? 0).rounded()),
-                "desc": describe(code)]
+        var msg: [String: Any] = ["t": "weather", "city": place["name"] as? String ?? city,
+                                  "date": String((cur["time"] as? String ?? "").prefix(10)), "at": Int(Date().timeIntervalSince1970),
+                                  "temp": Int(((cur["temperature_2m"] as? Double) ?? 0).rounded()),
+                                  "max": Int((((daily["temperature_2m_max"] as? [Double])?.first) ?? 0).rounded()),
+                                  "min": Int((((daily["temperature_2m_min"] as? [Double])?.first) ?? 0).rounded()),
+                                  "desc": describe(code), "code": code]
+        if let hourly = obj["hourly"] as? [String: Any],
+           let rain = rainAhead(times: hourly["time"] as? [String] ?? [], codes: hourly["weather_code"] as? [Int] ?? [],
+                                probs: hourly["precipitation_probability"] as? [Int] ?? [], now: cur["time"] as? String ?? "") {
+            msg["rain"] = ["from": rain.from, "prob": rain.prob]
+        }
+        return msg
+    }
+
+    /// 今天接下来会不会下雨：从当前这个小时起，第一个下雨（天气代码是雨 / 雷雨，或降水概率 ≥ 60%）的整点，
+    /// 以及这些小时里最大的降水概率。时间都是当地时间的 "2026-11-01T14:00"，按字符串比较。
+    nonisolated static func rainAhead(times: [String], codes: [Int], probs: [Int], now: String) -> (from: Int, prob: Int)? {
+        let hour = String(now.prefix(13))
+        var from: Int?, prob = 0
+        for (i, t) in times.enumerated() where t.prefix(13) >= hour && t.prefix(10) == hour.prefix(10) {
+            let c = i < codes.count ? codes[i] : -1, p = i < probs.count ? probs[i] : 0
+            let wet = (51...67).contains(c) || (80...82).contains(c) || (95...99).contains(c) || p >= 60
+            guard wet else { continue }
+            if from == nil { from = Int(t.dropFirst(11).prefix(2)) }
+            prob = max(prob, p)
+        }
+        return from.map { ($0, prob) }
     }
 
     /// WMO 天气代码 → 一两个字的描述。

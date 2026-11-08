@@ -1,7 +1,7 @@
 // 部署前只需要改这里。
 window.SI_CONFIG = {
   // 版本号的兜底值：页面会从 GitHub 最新 Release 读取版本号，读不到（网络问题、接口限流）时才显示这个。
-  version: "0.4.0",
+  version: "0.5.0",
   // GitHub 仓库地址，例如 "https://github.com/<用户名>/serverisland"。
   // 填好后：GitHub 链接、Issues、下载按钮（指向 Releases 最新版）都会自动生效。
   repo: "https://github.com/zhyan0603/ServerIsland",

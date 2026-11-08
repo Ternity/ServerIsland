@@ -28,7 +28,8 @@ final class SettingsWindowController {
                 MainActor.assumeIsolated { _ = NSApp.setActivationPolicy(.accessory) }
             }
         }
-        // 菜单栏 App 打开窗口时需要临时激活。
+        // 菜单栏 App 打开窗口时需要临时激活。主菜单按当前语言重建一次（编辑菜单让输入框能用 ⌘V 等快捷键）。
+        NSApp.mainMenu = AppDelegate.makeMainMenu()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
@@ -38,7 +39,10 @@ final class SettingsWindowController {
 enum SettingsPage: Hashable {
     case general
     case rules
+    case billing
+    case push
     case display
+    case local
     case host(UUID)
 }
 
@@ -68,7 +72,18 @@ struct SettingsView: View {
     init(store: ConfigStore, engine: MonitorEngine, initial: SettingsPage = .general) {
         self.store = store
         self.engine = engine
-        _selection = State(initialValue: initial)
+        _selection = State(initialValue: Self.pendingPage ?? initial)
+        Self.pendingPage = nil
+    }
+
+    /// 从刘海里直接打开某一页（如费用页的"设置单价"）：窗口还没建时在 init 里用，已经开着时收通知切换。
+    static var pendingPage: SettingsPage?
+    static let selectPage = Notification.Name("ServerIsland.selectSettingsPage")
+
+    static func open(_ page: SettingsPage, show: () -> Void) {
+        pendingPage = page
+        show()
+        NotificationCenter.default.post(name: selectPage, object: nil)
     }
 
     var body: some View {
@@ -83,12 +98,26 @@ struct SettingsView: View {
                                    : L("\(store.settings.progressRules.count) 条自定义规则", "\(store.settings.progressRules.count) custom rules"),
                                symbol: "wand.and.stars", tint: .indigo)
                         .tag(SettingsPage.rules)
+                    SidebarRow(title: L("计费", "Billing"),
+                               subtitle: store.settings.billingEnabled ? L("已开启 · 估算费用", "On · cost estimates") : L("按卡时估算花费", "Estimate GPU-hour costs"),
+                               symbol: "creditcard.fill", tint: .orange)
+                        .tag(SettingsPage.billing)
+                    SidebarRow(title: L("手机推送", "Phone Push"),
+                               subtitle: store.settings.phonePush.enabled && engine.phonePush.hasKey
+                                   ? L("已开启 · ", "On · ") + store.settings.phonePush.scope.shortLabel
+                                   : L("任务结束推送到微信", "Job alerts to WeChat / WeCom"),
+                               symbol: "iphone.radiowaves.left.and.right", tint: .green)
+                        .tag(SettingsPage.push)
                     // 外接副屏：只有在通用页底部打开以后才出现。
                     if store.settings.usbDisplay {
                         SidebarRow(title: L("副屏", "Display"),
                                    subtitle: engine.displayLink?.connected == true ? L("已连接", "Connected") : L("ESP32 小屏幕", "ESP32 screen"),
                                    symbol: "display", tint: .teal)
                             .tag(SettingsPage.display)
+                    }
+                    if let page = LocalExtensions.type?.settingsPage(store: store) {
+                        SidebarRow(title: page.title, subtitle: page.subtitle, symbol: page.symbol, tint: page.tint)
+                            .tag(SettingsPage.local)
                     }
                 }
                 Section {
@@ -161,10 +190,20 @@ struct SettingsView: View {
                     }
                 case .rules:
                     ProgressRulesView(store: store, engine: engine)
+                case .billing:
+                    BillingSettingsView(store: store, engine: engine)
+                case .push:
+                    PhonePushSettingsView(store: store, push: engine.phonePush)
                 case .display:
                     if store.settings.usbDisplay {
                         DisplaySettingsView(store: store, link: engine.displayLink)
                             .navigationTitle(L("副屏", "Display"))
+                    } else {
+                        GeneralSettingsView(store: store, engine: engine)
+                    }
+                case .local:
+                    if let page = LocalExtensions.type?.settingsPage(store: store) {
+                        page.view.navigationTitle(page.title)
                     } else {
                         GeneralSettingsView(store: store, engine: engine)
                     }
@@ -182,6 +221,9 @@ struct SettingsView: View {
             }
         }
         .onChange(of: store.settings.hosts) { _, _ in engine.sync() }
+        .onReceive(NotificationCenter.default.publisher(for: Self.selectPage)) { _ in
+            if let p = Self.pendingPage { selection = p; Self.pendingPage = nil }
+        }
         // 关掉"外接副屏"时，副屏页从侧栏消失：回到通用页。
         .onChange(of: store.settings.usbDisplay) { _, on in if !on && selection == .display { selection = .general } }
         .frame(minWidth: 760, minHeight: 520)

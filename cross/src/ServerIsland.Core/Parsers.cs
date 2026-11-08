@@ -184,6 +184,8 @@ public static class Parsers
                 job.Reason = reason[1..^1];
             if (Col(5).Length > 0) detail.Add(Col(5));
             job.Detail = string.Join(" · ", detail);
+            if (Col(5).Length > 0) job.Partition = Col(5);
+            job.Nodes = Text.Int(Col(3));
 
             // 数组：优先用 %F/%K，否则从 "123_5" / "123_[7-99%10]" 里拆。
             if (tail == 8 && Col(7) != "N/A" && Col(7).Length > 0 && Col(6) != id)
@@ -247,6 +249,7 @@ public static class Parsers
                     Array = new ArrayInfo { BaseID = bas },
                     Limit = job.Limit,
                     Workdir = job.Workdir,
+                    Partition = job.Partition,
                 };
                 outList.Add(g);
                 i = outList.Count - 1;
@@ -284,6 +287,48 @@ public static class Parsers
             map[id] = new SacctFinal(JobStates.FromSlurm(raw), raw, f.Length > 3 ? SlurmDuration(f[3]) : null, f.Length > 4 ? f[4] : "");
         }
         return map;
+    }
+
+    /// 计费用的资源：`alloc` 段（`作业号|分到的资源|每节点申请|整个作业申请|节点数`，PBS 只有前两列）和 sacct / `si_pbs a` 的最后一列（AllocTRES）。认不出的行跳过。
+    public static Dictionary<string, JobAlloc> Allocs(IEnumerable<string> lines)
+    {
+        var map = new Dictionary<string, JobAlloc>();
+        foreach (var line in lines)
+        {
+            var f = line.Split('|');
+            if (f.Length < 2) continue;
+            var id = f[0].TrimWs();
+            string Col(int i) => i < f.Length ? f[i] : "";
+            var nodes = Text.Int(new string(Col(4).TakeWhile(char.IsDigit).ToArray()));
+            if (id.Length == 0 || JobAlloc.Parse(f[1], Col(2), Col(3), nodes) is not { } a) continue;
+            map[id] = a;
+        }
+        return map;
+    }
+
+    public static Dictionary<string, JobAlloc> SacctAllocs(IEnumerable<string> lines)
+    {
+        var map = new Dictionary<string, JobAlloc>();
+        foreach (var line in lines)
+        {
+            var f = line.Split('|');
+            if (f.Length < 6 || !f[^1].Contains('=') || JobAlloc.Parse(f[^1]) is not { } a) continue;
+            map[f[0].TrimWs()] = a;
+        }
+        return map;
+    }
+
+    /// `qstat -Q` 的队列名（跳过表头和分隔线）。
+    public static List<string> PbsQueues(IEnumerable<string> lines)
+    {
+        var list = new List<string>();
+        foreach (var line in lines)
+        {
+            var first = line.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (first == null || first == "Queue" || first.StartsWith('-') || first.StartsWith("qstat") || list.Contains(first)) continue;
+            list.Add(first);
+        }
+        return list;
     }
 
     /// Slurm 时间格式：`[days-]hours:minutes:seconds`、`minutes:seconds`、`UNLIMITED` 等。

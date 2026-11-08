@@ -212,6 +212,7 @@ public sealed class IslandViews(MonitorEngine engine, ConfigStore store, IslandS
                 st.ReturnPage = st.Page;
                 st.Page = new IslandPage(PageKind.Job, host.Id, job.Id);
             });
+        if (p.Kind == PageKind.Costs) return _pages.CostPage();
         if (store.Host(p.Host) is not { } host) return new Control();
         switch (p.Kind)
         {
@@ -249,8 +250,13 @@ public sealed class IslandViews(MonitorEngine engine, ConfigStore store, IslandS
         left.Width = sideWidth;
 
         bool onJobs = st.Page.Kind == PageKind.Jobs;
+        bool onCosts = st.Page.Kind == PageKind.Costs;
         var right = H(8,
             GlobalPollMenu(),
+            store.Settings.BillingEnabled
+                ? IconButton(Billing.IconFor(store.Settings.Currency), L("费用：今天、本月、按分区和作业（估算）", "Costs: today, this month, by partition and job (estimate)"),
+                             () => st.Page = onCosts ? IslandPage.List : new IslandPage(PageKind.Costs), active: onCosts)
+                : null,
             IconButton("list", L("全部任务：所有服务器的任务，可搜索、筛选", "All jobs across servers: search and filter"), () =>
             {
                 if (onJobs) st.Page = IslandPage.List; else st.OpenAllJobs();

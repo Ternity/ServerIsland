@@ -9,10 +9,57 @@ public static class DemoData
     public static AppSettings Settings()
     {
         var s = new AppSettings();
-        var a = new HostConfig("hpc-login", L("HPC 集群", "HPC Cluster"), HostKind.Slurm) { Auth = AuthMode.Interactive };
+        var a = new HostConfig("hpc-login", L("HPC 集群", "HPC Cluster"), HostKind.Slurm)
+        {
+            Auth = AuthMode.Interactive,
+            Prices = [new PartitionPrice("", PriceUnit.Cpu, 0.03),
+                      new PartitionPrice("cpu", PriceUnit.Cpu, 0.04, L("64 节点 · 共 4096 核", "64 nodes · 4096 cores")),
+                      new PartitionPrice("gpu-v100", PriceUnit.Gpu, 2.5, L("16 节点 · V100 共 64 张GPU", "16 nodes · V100 64 GPUs"))],
+        };
         var b = new HostConfig("gpu-box", L("4090 工作站", "4090 Workstation"), HostKind.Direct);
         s.Hosts = [a, b];
         return s;
+    }
+
+    /// 费用页的演示账本：本月和上月在 HPC 集群上结束的作业（虚构）。
+    public static List<CostEntry> CostEntries(Guid host, DateTime? at = null)
+    {
+        var now = at ?? DateTime.Now;
+        var monthStart = new DateTime(now.Year, now.Month, 1);
+        var today = now.Day;
+        var list = new List<CostEntry>();
+        // (名称, 分区, 计价, 资源量, 小时, 单价, 几天前)
+        (string, string, PriceUnit, double, double, double, int)[] rows =
+        [
+            ("aimd_LGPS_1200K", "cpu", PriceUnit.Cpu, 128, 48, 0.04, 1),
+            ("relax_Li3PS4_pbe", "cpu", PriceUnit.Cpu, 64, 2.1, 0.04, 0),
+            ("phonon_LiCoO2_222", "cpu", PriceUnit.Cpu, 64, 0.7, 0.04, 0),
+            ("nep_train_LiF", "gpu-v100", PriceUnit.Gpu, 4, 24, 2.5, 3),
+            ("gpumd_kappa_250K", "gpu-v100", PriceUnit.Gpu, 1, 11.5, 2.5, 2),
+            ("scf_LiCoO2_kmesh", "cpu", PriceUnit.Cpu, 32, 0.9, 0.04, 4),
+            ("neb_Li_vacancy", "cpu", PriceUnit.Cpu, 128, 6, 0.04, 6),
+            ("gpumd_kappa_300K_old", "gpu-v100", PriceUnit.Gpu, 1, 9, 2.5, 8),
+            ("md_HEA_npt", "gpu-v100", PriceUnit.Gpu, 2, 14, 2.5, 11),
+            ("relax_LiCoO2_pbe", "cpu", PriceUnit.Cpu, 64, 5, 0.04, 13),
+        ];
+        for (int i = 0; i < rows.Length; i++)
+        {
+            var r = rows[i];
+            if (r.Item7 >= today) continue;
+            var end = now.Date.AddDays(-r.Item7).AddSeconds(3600 + i * 600);
+            if (end > now.AddMinutes(-10)) end = now.AddMinutes(-10);
+            list.Add(new CostEntry { Host = host, Id = $"88119{10 + i}", Name = r.Item1, Partition = r.Item2, Unit = r.Item3, Amount = r.Item4,
+                                     Seconds = r.Item5 * 3600, Price = r.Item6, EndedAt = end });
+        }
+        // 数组的 14 个元素
+        for (int k = 0; k < 14 && today > 1; k++)
+            list.Add(new CostEntry { Host = host, Id = $"8812300_{k}", ArrayBase = "8812300", Name = "eos_scan", Partition = "cpu", Unit = PriceUnit.Cpu,
+                                     Amount = 32, Seconds = 2400, Price = 0.04, EndedAt = now.Date.AddSeconds(1800 + k * 300) });
+        // 上月
+        for (int k = 0; k < 8; k++)
+            list.Add(new CostEntry { Host = host, Id = $"8800{100 + k}", Name = $"train_run_{k}", Partition = "gpu-v100", Unit = PriceUnit.Gpu,
+                                     Amount = 2, Seconds = 20 * 3600, Price = 2.5, EndedAt = monthStart.AddDays(-(k + 1) * 3) });
+        return list;
     }
 
     public static readonly HashSet<string> Aliases = ["hpc-login", "gpu-box"];
@@ -41,12 +88,14 @@ public static class DemoData
             { Vasp = VaspMode.Md, Current = 1_240 + t, Total = 5_000, HasTarget = true, Rate = 0.034, UpdatedAt = DateTime.Now, EndMarker = false };
             var md = AppJob("8812044", "aimd_Li3PS4_900K", JobSource.Slurm, aimd);
             md.Elapsed = 36_420 + t * 2; md.Limit = 48 * 3600; md.Detail = "cn[012-013] · cpu";
+            md.Partition = "cpu"; md.Nodes = 2; md.Alloc = new JobAlloc(128, 0, 2);
 
             // VASP 结构优化：不知道总步数，只显示离子步
             var relaxApp = new AppProgress(AppKind.Vasp, Home + "/LiCoO2/relax-hse")
             { Vasp = VaspMode.Relax, Current = 17, HasTarget = false, UpdatedAt = DateTime.Now, EndMarker = false };
             var relax = AppJob("8812101", "relax_LiCoO2_hse", JobSource.Slurm, relaxApp);
             relax.Elapsed = 11_530 + t * 2; relax.Limit = 24 * 3600; relax.Detail = "cn027 · cpu";
+            relax.Partition = "cpu"; relax.Nodes = 1; relax.Alloc = new JobAlloc(64, 0, 1);
 
             // GPUMD 热导率
             var kappa = new AppProgress(AppKind.Gpumd, Home + "/graphene/kappa-300K")
@@ -56,6 +105,7 @@ public static class DemoData
             };
             var gpumd = AppJob("8812230", "gpumd_kappa_300K", JobSource.Slurm, kappa);
             gpumd.Elapsed = 2_710 + t * 2; gpumd.Limit = 12 * 3600; gpumd.Detail = "gpu07 · gpu-v100";
+            gpumd.Partition = "gpu-v100"; gpumd.Nodes = 1; gpumd.Alloc = new JobAlloc(8, 1, 1);
 
             // 数组作业：40 个应变点的状态方程扫描
             var eos = new RemoteJob("8812300", "eos_scan", JobState.Running, JobSource.Slurm) { ArrayJobID = "8812300" };
@@ -65,11 +115,13 @@ public static class DemoData
                 running.Add(new RemoteJob($"8812300_{16 + k}", "eos_scan", JobState.Running, JobSource.Slurm)
                 {
                     ArrayJobID = "8812300", ArrayTask = $"{16 + k}", Elapsed = 300 + k * 170 + t * 2, Limit = 4 * 3600, Detail = $"cn0{40 + k} · cpu",
+                    Partition = "cpu", Nodes = 1, Alloc = new JobAlloc(32, 0, 1),
                 });
             }
             eos.Array = new ArrayInfo { BaseID = "8812300", Running = running, Pending = 18, Done = 14, Failed = 2, Total = 40, Accurate = true };
             eos.Elapsed = running.Max(r => r.Elapsed);
             eos.Limit = 4 * 3600;
+            eos.Partition = "cpu";
             eos.Detail = L("运行 6 · 排队 18 · 失败 2", "6 running · 18 pending · 2 failed");
 
             var phonon = new RemoteJob("8812355", "phonon_Si_444", JobState.Pending, JobSource.Slurm) { Limit = 12 * 3600, Detail = "(Priority) · cpu", Reason = "Priority" };

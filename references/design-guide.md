@@ -131,9 +131,16 @@
 | Monitor/AppCurves.swift | ServerIsland.Core/AppCurves.cs |
 | Monitor/PendingReason.swift | ServerIsland.Core/PendingReason.cs |
 | Monitor/Partitions.swift | ServerIsland.Core/Partitions.cs |
+| Models/Billing.swift、Monitor/MonitorEngine+Billing.swift | ServerIsland.Core/Billing.cs、MonitorEngine.Billing.cs |
+| Notch/CostPage.swift、Settings/BillingSettingsView.swift | ServerIsland.Desktop/Island/CostPage.cs、Settings/BillingPage.cs |
+| App/SelfTestBilling.swift | ServerIsland.Core/SelfTestBilling.cs |
+| Monitor/PhonePush.swift、Settings/PhonePushSettingsView.swift、App/SelfTestPush.swift（手机推送） | ServerIsland.Core/PhonePush.cs、Desktop/Settings/PhonePushPage.cs、Core/SelfTestPush.cs（消息文本两边逐字一致，可用 `--push-preview` 对比） |
 | Monitor/HistoryStore.swift、Shared/DebugLog.swift | ServerIsland.Core/HistoryStore.cs |
 | Monitor/DemoData.swift | ServerIsland.Core/DemoData.cs（另有详情 / 历史 / 分区的演示数据） |
 | Monitor/MonitorEngine(+Actions).swift | ServerIsland.Core/MonitorEngine(.Actions).cs |
+| Monitor/DisplayLink.swift（USB 副屏） | ServerIsland.Core/DisplayLink.cs（BLELink.swift → Windows：Desktop/Platform/WinBle.cs；Linux 还没有蓝牙） |
+| Monitor/AgentMonitor.swift、AIUsage.swift、DisplayExtras.swift | ServerIsland.Core/AgentMonitor.cs、AIUsage.cs、DisplayExtras.cs（没有系统日历） |
+| Settings/DisplaySettingsView.swift、AgentHooksView.swift、CampusNetworkSection.swift | ServerIsland.Desktop/Settings/DisplayPage.cs |
 | SSH/SSHRunner.swift、AskPass.swift | ServerIsland.Core/Ssh/SshCommon.cs、OpenSshTransport.cs（+ Desktop/Dialogs.cs 的 AskPassApp） |
 | SSH/SSHConfigParser.swift | ServerIsland.Core/Ssh/SshConfig.cs |
 | —（Mac 版用系统 ssh） | ServerIsland.Core/Ssh/ManagedSshTransport.cs、KnownHosts.cs |

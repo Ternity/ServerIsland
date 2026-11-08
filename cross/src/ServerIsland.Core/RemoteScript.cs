@@ -10,6 +10,14 @@ public static class RemoteScript
 {
     public const string Marker = "@@SI:";
 
+    /// 计费要查的资源：`Known` 是已经知道资源的作业（默认 squeue 时脚本自己从这一轮的列表里找新作业，跳过它们）；
+    /// `Query` 是自定义了 squeue 时要查的作业（上一轮看到的运行中作业）。
+    public sealed record AllocRequest(IReadOnlyList<string> Query, IReadOnlyList<string> Known)
+    {
+        public static readonly AllocRequest Empty = new([], []);
+        public bool Same(AllocRequest o) => Query.SequenceEqual(o.Query) && Known.SequenceEqual(o.Known);
+    }
+
     public static string ShellQuote(string s) => "'" + s.Replace("'", "'\\''") + "'";
 
     static string SectionText(string name, string body) =>
@@ -21,7 +29,11 @@ public static class RemoteScript
     /// 一个周期里的数据尽量只取一次，存在 shell 变量里给后面的段用（说明见 Swift 版 RemoteScript.build）：
     /// `SI_JW` / `SI_PQ`（调度系统只查询一次）、`SI_PT`（进程只遍历一遍）、`SI_GA`（nvidia-smi 的计算进程）。
     /// `appSignatures`：上次识别结果的文件签名（目录 → 签名），文件没变的目录不再重读。`includeDisk`：磁盘由引擎决定隔几分钟查一次。
-    public static string Build(HostConfig host, IReadOnlyDictionary<string, string>? appSignatures = null, bool includeDisk = true)
+    /// `alloc`：打开计费时不为 null。Slurm 是还不知道分到多少资源的运行中作业（每个作业只查一次 scontrol show job，
+    /// 新版本的字段叫 AllocTRES，老版本叫 TRES）。输出 `作业号|分到的资源|每节点申请的资源|整个作业申请的资源|节点数`：
+    /// 有的 Slurm 没把 gres/gpu 写进 AccountingStorageTRES，分到的资源里就没有卡，这时按申请的卡数算（见 JobAlloc.Parse）；PBS 直接从这一轮的 qstat -f 全文里取，不再查询。
+    public static string Build(HostConfig host, IReadOnlyDictionary<string, string>? appSignatures = null, bool includeDisk = true,
+                               AllocRequest? alloc = null)
     {
         var c = host.Commands;
         var lines = new List<string> { $"printf '{Marker}BEGIN\\n'" };
@@ -55,6 +67,27 @@ public static class RemoteScript
             }
             else if (host.Kind == HostKind.Pbs)
                 Sec("qstat", PbsFunction + $"if command -v qstat >/dev/null 2>&1; then SI_PQ=$({{ {c.Qstat}\n}}); printf '%s\\n' \"$SI_PQ\" | si_pbs q; else echo 'qstat: command not found'; false; fi");
+            if (alloc != null)
+            {
+                const string body = """SI_S=$(scontrol show job -o "$j" 2>/dev/null | head -n 1 | tr ' ' '\n'); """
+                    + """si_v() { printf '%s\n' "$SI_S" | sed -n "s/^$1=//p" | head -n 1; }; """
+                    + """printf '%s|%s|%s|%s|%s\n' "$j" "$(si_v AllocTRES)$(si_v TRES)" "$(si_v TresPerNode)" "$(si_v TresPerJob)" "$(si_v NumNodes)"; done; true""";
+                if (host.Kind == HostKind.Slurm && c.Squeue == CommandSet.Defaults.Squeue)
+                {
+                    // 默认 squeue：这一轮的运行中作业就在 SI_JW 里，跳过已经知道资源的，同一轮就能查到新作业（一轮最多 20 个）。
+                    var known = string.Join(" ", alloc.Known.Select(SafeSlurmID).Where(x => x != null).Take(300));
+                    Sec("alloc", "SI_K=' " + known + " '; " + """SI_N=0; for j in $(printf '%s\n' "$SI_JW" | awk -F'|' '$2 == "RUNNING" { print $1 }'); do """
+                        + """case "$SI_K" in *" $j "*) continue;; esac; SI_N=$((SI_N + 1)); [ "$SI_N" -le 20 ] || break; """ + body);
+                }
+                else if (host.Kind == HostKind.Slurm)
+                {
+                    // 自定义了 squeue：查上一轮看到、还不知道资源的运行中作业。
+                    var ids = alloc.Query.Select(SafeSlurmID).Where(x => x != null).Take(20).Select(x => ShellQuote(x!)).ToList();
+                    if (ids.Count > 0) Sec("alloc", "for j in " + string.Join(" ", ids) + "; do " + body);
+                }
+                else if (host.Kind == HostKind.Pbs)
+                    Sec("alloc", """printf '%s\n' "$SI_PQ" | si_pbs t""");
+            }
             if (listsProcesses || (host.Kind.IsScheduler() && host.DetectApps))
                 lines.Add(AppDetectors.JobIDFunction + ProcessScan(host));
             if (listsProcesses) Sec("procs", c.Processes);
@@ -213,6 +246,9 @@ public static class RemoteScript
         // WorkDir 列是后来才有的，老版本 sacct 不认识这一列时去掉它再查一次
         Wrap(host, [("history", """sacct -n -X -P -S now-24hours -u "$(id -un)" -o JobID,JobName,State,Elapsed,End,ExitCode,WorkDir 2>/dev/null || sacct -n -X -P -S now-24hours -u "$(id -un)" -o JobID,JobName,State,Elapsed,End,ExitCode""")]);
 
+    /// PBS 的队列列表（设置页填单价用）。
+    public static string PbsQueuesScript(HostConfig host) => Wrap(host, [("queues", "qstat -Q")]);
+
     /// 高负载进程（给用户挑选要监听的 PID）。
     public static string TopProcessesScript(HostConfig host) => Wrap(host, [
         ("procs", """ps -u "$(id -un)" -o pid=,etimes=,pcpu=,rss=,args= --sort=-pcpu | head -n 40"""),
@@ -264,7 +300,7 @@ public static class RemoteScript
     public const string PbsFunction = """
         si_pbs() { awk -v mode="$1" '
         function clear() { id = ""; k = ""; delete v }
-        function out(   jid, arr, task, st, ex, S, name, n, r, h, nh, parts, i, x, seen, wd) {
+        function out(   jid, arr, task, st, ex, S, name, n, r, h, nh, parts, i, x, seen, wd, c, g, tc, tg, m, p, q, tr) {
           if (id == "") return
           jid = id; sub(/\..*$/, "", jid)
           if (jid ~ /\[\]$/) { clear(); return }
@@ -293,10 +329,24 @@ public static class RemoteScript
             h = v["exec_host"]; r = ""; nh = split(h, parts, "+")
             for (i = 1; i <= nh; i++) { x = parts[i]; sub(/\/.*$/, "", x); if (x != "" && !(x in seen)) { seen[x] = 1; r = r (r == "" ? "" : ",") x } }
           }
+          c = v["Resource_List.ncpus"]; g = v["Resource_List.ngpus"]
+          if (c == "" || g == "") {
+            nh = split(v["Resource_List.nodes"], parts, "+"); tc = 0; tg = 0
+            for (i = 1; i <= nh; i++) {
+              x = parts[i]; m = (x ~ /^[0-9]+(:|$)/) ? x + 0 : 1; p = 1; q = 0
+              if (match(x, /ppn=[0-9]+/)) p = substr(x, RSTART + 4, RLENGTH - 4) + 0
+              if (match(x, /gpus=[0-9]+/)) q = substr(x, RSTART + 5, RLENGTH - 5) + 0
+              tc += m * p; tg += m * q
+            }
+            if (c == "" && nh > 0) c = tc
+            if (g == "" && nh > 0) g = tg
+          }
+          tr = (c == "" ? "" : "cpu=" c ",") "node=" n (g == "" ? "" : ",gres/gpu=" g)
           wd = v["Variable_List"]
           if (match(wd, /PBS_O_WORKDIR=[^,]*/)) wd = substr(wd, RSTART + 14, RLENGTH - 14); else wd = ""
           if (mode == "q") { if (st != "F" && st != "X" && st != "C") print jid "|" name "|" S "|" v["resources_used.walltime"] "|" v["Resource_List.walltime"] "|" n "|" r "|" v["queue"] "|" arr "|" task }
-          else if (mode == "a") print jid "|" name "|" S "|" v["resources_used.walltime"] "|" (ex == "" ? "" : ex ":0")
+          else if (mode == "a") print jid "|" name "|" S "|" v["resources_used.walltime"] "|" (ex == "" ? "" : ex ":0") "|" tr
+          else if (mode == "t") { if (S == "RUNNING" || S == "COMPLETING") print jid "|" tr }
           else if (mode == "w") { if (S == "RUNNING" && wd != "") print jid "|" wd }
           else if (mode == "d") { if (wd != "") print jid "|" wd }
           clear()

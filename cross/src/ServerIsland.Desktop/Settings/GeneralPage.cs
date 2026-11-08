@@ -422,6 +422,12 @@ public sealed class GeneralPage(SettingsWindow window, SettingsKit k, ConfigStor
                 logStatus,
             } },
         ]));
+        col.Children.Add(k.Section(L("扩展", "Extensions"), "puzzle", Color.Parse("#14B8A6"), [
+            k.ToggleRow(L("外接副屏（ESP32）", "External Display (ESP32)"),
+                L("把任务状态、AI 编程工具的提醒显示在一块刷了 ServerIsland 固件的 ESP32 小屏幕上（固件暂未公开）。打开后侧栏多一个\"副屏\"页面。没有这种屏幕就不用管它。",
+                  "Mirror job status and AI coding-tool alerts on a small ESP32 screen running the ServerIsland firmware (not yet public). Turning this on adds a Display page to the sidebar. Ignore it if you don't have one."),
+                S.UsbDisplay, v => { S.UsbDisplay = v; Touch(); }),
+        ]));
         return col;
     }
 }

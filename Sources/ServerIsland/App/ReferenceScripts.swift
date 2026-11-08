@@ -59,6 +59,10 @@ enum ReferenceScripts {
             ("poll-slurm-cached.sh", RemoteScript.build(for: slurm, appSignatures: ["/home/u/it's run": "1.2 3.4 ", "/home/u/a": "/home/u/a/x.log 1 2 "], includeDisk: false)),
             ("poll-cluster.sh", RemoteScript.build(for: cluster)),
             ("poll-cluster-custom.sh", RemoteScript.build(for: custom)),
+            ("poll-cluster-billing.sh", RemoteScript.build(for: cluster, alloc: .init(query: ["1"], known: ["4821337", "8812300_16", "x;y"]))),
+            ("poll-cluster-custom-billing.sh", RemoteScript.build(for: custom, alloc: .init(query: ["4821337", "8812300_16", "x;y"], known: ["2"]))),
+            ("poll-pbs-billing.sh", RemoteScript.build(for: pbs, alloc: .init())),
+            ("pbs-queues.sh", RemoteScript.pbsQueuesScript(host: pbs)),
         ]
     }
 }

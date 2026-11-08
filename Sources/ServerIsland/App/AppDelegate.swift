@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // ⓘ 和按钮的悬停说明：系统默认要停一秒多才出来，改成 0.25 秒（只影响本 App）
         UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 250])
+        // 菜单栏 App 默认没有主菜单：没有"编辑"菜单时，输入框里的 ⌘V / ⌘C / ⌘A 都不起作用。
+        NSApp.mainMenu = Self.makeMainMenu()
         store = ConfigStore(persist: !demo)
         if demo { store.settings = DemoData.settings() }
         NSScreen.islandPreference = store.settings.islandScreen
@@ -45,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         island.show()
         engine.start()
         engine.displayLink?.start()
+        LocalExtensions.type?.start(engine: engine, store: store)
 
         if store.settings.systemNotifications && !demo {
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -67,6 +70,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         store.saveNow()
+    }
+
+    // MARK: - 主菜单（设置窗口打开时显示在屏幕顶部）
+
+    static func makeMainMenu() -> NSMenu {
+        let main = NSMenu()
+        func item(_ title: String, _ action: Selector?, _ key: String = "", _ mods: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+            let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            i.keyEquivalentModifierMask = mods
+            return i
+        }
+        // 应用菜单：不给"退出"配 ⌘Q，免得想关设置窗口时把整个 App 退出了（刘海也会跟着消失）。
+        let appMenu = NSMenu()
+        appMenu.addItem(item(L("隐藏 ServerIsland", "Hide ServerIsland"), #selector(NSApplication.hide(_:)), "h"))
+        appMenu.addItem(.separator())
+        appMenu.addItem(item(L("退出 ServerIsland", "Quit ServerIsland"), #selector(NSApplication.terminate(_:))))
+        let appItem = NSMenuItem()
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let edit = NSMenu(title: L("编辑", "Edit"))
+        edit.addItem(item(L("撤销", "Undo"), Selector(("undo:")), "z"))
+        edit.addItem(item(L("重做", "Redo"), Selector(("redo:")), "z", [.command, .shift]))
+        edit.addItem(.separator())
+        edit.addItem(item(L("剪切", "Cut"), #selector(NSText.cut(_:)), "x"))
+        edit.addItem(item(L("复制", "Copy"), #selector(NSText.copy(_:)), "c"))
+        edit.addItem(item(L("粘贴", "Paste"), #selector(NSText.paste(_:)), "v"))
+        edit.addItem(item(L("全选", "Select All"), #selector(NSText.selectAll(_:)), "a"))
+        let editItem = NSMenuItem(title: L("编辑", "Edit"), action: nil, keyEquivalent: "")
+        editItem.submenu = edit
+        main.addItem(editItem)
+
+        let window = NSMenu(title: L("窗口", "Window"))
+        window.addItem(item(L("关闭", "Close"), #selector(NSWindow.performClose(_:)), "w"))
+        window.addItem(item(L("最小化", "Minimize"), #selector(NSWindow.performMiniaturize(_:)), "m"))
+        let windowItem = NSMenuItem(title: L("窗口", "Window"), action: nil, keyEquivalent: "")
+        windowItem.submenu = window
+        main.addItem(windowItem)
+        return main
     }
 
     // MARK: - 菜单栏图标

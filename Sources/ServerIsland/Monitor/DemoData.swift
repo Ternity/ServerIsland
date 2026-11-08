@@ -8,9 +8,49 @@ enum DemoData {
         var s = AppSettings()
         var a = HostConfig(alias: "hpc-login", displayName: L("HPC 集群", "HPC Cluster"), kind: .slurm)
         a.auth = .interactive
+        a.prices = [PartitionPrice(partition: "", unit: .cpu, price: 0.03),
+                    PartitionPrice(partition: "cpu", unit: .cpu, price: 0.04, note: L("64 节点 · 共 4096 核", "64 nodes · 4096 cores")),
+                    PartitionPrice(partition: "gpu-v100", unit: .gpu, price: 2.5, note: L("16 节点 · V100 共 64 张GPU", "16 nodes · V100 64 GPUs"))]
         let b = HostConfig(alias: "gpu-box", displayName: L("4090 工作站", "4090 Workstation"), kind: .direct)
         s.hosts = [a, b]
         return s
+    }
+
+    /// 费用页的演示账本：本月和上月在 HPC 集群上结束的作业（虚构）。
+    static func costEntries(host: UUID, now: Date = Date()) -> [CostEntry] {
+        let cal = Calendar.current
+        let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: now)) ?? now
+        let today = cal.component(.day, from: now)
+        var out: [CostEntry] = []
+        // (名称, 分区, 计价, 资源量, 小时, 单价, 几天前)
+        let rows: [(String, String, PriceUnit, Double, Double, Double, Int)] = [
+            ("aimd_LGPS_1200K", "cpu", .cpu, 128, 48, 0.04, 1),
+            ("relax_Li3PS4_pbe", "cpu", .cpu, 64, 2.1, 0.04, 0),
+            ("phonon_LiCoO2_222", "cpu", .cpu, 64, 0.7, 0.04, 0),
+            ("nep_train_LiF", "gpu-v100", .gpu, 4, 24, 2.5, 3),
+            ("gpumd_kappa_250K", "gpu-v100", .gpu, 1, 11.5, 2.5, 2),
+            ("scf_LiCoO2_kmesh", "cpu", .cpu, 32, 0.9, 0.04, 4),
+            ("neb_Li_vacancy", "cpu", .cpu, 128, 6, 0.04, 6),
+            ("gpumd_kappa_300K_old", "gpu-v100", .gpu, 1, 9, 2.5, 8),
+            ("md_HEA_npt", "gpu-v100", .gpu, 2, 14, 2.5, 11),
+            ("relax_LiCoO2_pbe", "cpu", .cpu, 64, 5, 0.04, 13),
+        ]
+        for (i, r) in rows.enumerated() where r.6 < today {
+            let end = cal.startOfDay(for: now).addingTimeInterval(Double(-r.6) * 86400 + 3600 + Double(i) * 600)
+            out.append(CostEntry(host: host, id: "88119\(10 + i)", name: r.0, partition: r.1, unit: r.2, amount: r.3,
+                                 seconds: r.4 * 3600, price: r.5, endedAt: min(end, now.addingTimeInterval(-600))))
+        }
+        // 数组的 14 个元素
+        for k in 0..<14 where today > 1 {
+            out.append(CostEntry(host: host, id: "8812300_\(k)", arrayBase: "8812300", name: "eos_scan", partition: "cpu", unit: .cpu,
+                                 amount: 32, seconds: 2400, price: 0.04, endedAt: cal.startOfDay(for: now).addingTimeInterval(1800 + Double(k) * 300)))
+        }
+        // 上月
+        for k in 0..<8 {
+            out.append(CostEntry(host: host, id: "8800\(100 + k)", name: "train_run_\(k)", partition: "gpu-v100", unit: .gpu, amount: 2,
+                                 seconds: 20 * 3600, price: 2.5, endedAt: monthStart.addingTimeInterval(Double(-k - 1) * 3 * 86400)))
+        }
+        return out
     }
 
     static let aliases: Set<String> = ["hpc-login", "gpu-box"]
@@ -45,6 +85,7 @@ enum DemoData {
             aimd.rate = 0.034; aimd.updatedAt = Date(); aimd.endMarker = false
             var md = appJob("8812044", "aimd_Li3PS4_900K", source: .slurm, aimd)
             md.elapsed = 36_420 + t * 2; md.limit = 48 * 3600; md.detail = "cn[012-013] · cpu"
+            md.partition = "cpu"; md.nodes = 2; md.alloc = JobAlloc(cpus: 128, gpus: 0, nodes: 2)
 
             // VASP 结构优化：不知道总步数，只显示离子步
             var relaxApp = AppProgress(kind: .vasp, dir: home + "/LiCoO2/relax-hse")
@@ -52,6 +93,7 @@ enum DemoData {
             relaxApp.updatedAt = Date(); relaxApp.endMarker = false
             var relax = appJob("8812101", "relax_LiCoO2_hse", source: .slurm, relaxApp)
             relax.elapsed = 11_530 + t * 2; relax.limit = 24 * 3600; relax.detail = "cn027 · cpu"
+            relax.partition = "cpu"; relax.nodes = 1; relax.alloc = JobAlloc(cpus: 64, gpus: 0, nodes: 1)
 
             // GPUMD 热导率
             var kappa = AppProgress(kind: .gpumd, dir: home + "/graphene/kappa-300K")
@@ -59,6 +101,7 @@ enum DemoData {
             kappa.neighbor = .init(radialActual: 48, radialMax: 120, angularActual: 21, angularMax: 60)
             var gpumd = appJob("8812230", "gpumd_kappa_300K", source: .slurm, kappa)
             gpumd.elapsed = 2_710 + t * 2; gpumd.limit = 12 * 3600; gpumd.detail = "gpu07 · gpu-v100"
+            gpumd.partition = "gpu-v100"; gpumd.nodes = 1; gpumd.alloc = JobAlloc(cpus: 8, gpus: 1, nodes: 1)
 
             // 数组作业：40 个应变点的状态方程扫描
             var eos = RemoteJob(id: "8812300", name: "eos_scan", state: .running, source: .slurm)
@@ -68,11 +111,13 @@ enum DemoData {
                 var e = RemoteJob(id: "8812300_\(16 + k)", name: "eos_scan", state: .running, source: .slurm)
                 e.arrayJobID = "8812300"; e.arrayTask = "\(16 + k)"
                 e.elapsed = Double(300 + k * 170) + t * 2; e.limit = 4 * 3600; e.detail = "cn0\(40 + k) · cpu"
+                e.partition = "cpu"; e.nodes = 1; e.alloc = JobAlloc(cpus: 32, gpus: 0, nodes: 1)
                 running.append(e)
             }
             eos.array = ArrayInfo(baseID: "8812300", running: running, pending: 18, done: 14, failed: 2, total: 40, accurate: true)
             eos.elapsed = running.compactMap(\.elapsed).max()
             eos.limit = 4 * 3600
+            eos.partition = "cpu"
             eos.detail = L("运行 6 · 排队 18 · 失败 2", "6 running · 18 pending · 2 failed")
 
             var phonon = RemoteJob(id: "8812355", name: "phonon_Si_444", state: .pending, source: .slurm)

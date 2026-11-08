@@ -65,6 +65,43 @@ public static class CredentialStore
         catch { }
     }
 
+    // —— 其它密钥（如手机推送的 Webhook key），账户名是固定的字符串 ——
+
+    public static string? GetSecret(string account)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows()) return WinCred.Read(Service + ":" + account);
+            if (OperatingSystem.IsMacOS())
+                return Run("/usr/bin/security", ["find-generic-password", "-s", Service, "-a", account, "-w"], null) is (0, var o) ? o.TrimEnd('\n') : null;
+            return Available && Run("secret-tool", ["lookup", "service", Service, "host", account], null) is (0, var s) && s.Length > 0 ? s.TrimEnd('\n') : null;
+        }
+        catch (Exception e) { DebugLog.Log("读取凭据失败：" + e.Message); return null; }
+    }
+
+    public static bool SaveSecret(string account, string value, string label)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows()) return WinCred.Write(Service + ":" + account, value, "ServerIsland – " + label);
+            if (OperatingSystem.IsMacOS())
+                return Run("/usr/bin/security", ["add-generic-password", "-U", "-s", Service, "-a", account, "-l", "ServerIsland – " + label, "-w", value], null).Code == 0;
+            return Available && Run("secret-tool", ["store", "--label=ServerIsland – " + label, "service", Service, "host", account], value).Code == 0;
+        }
+        catch (Exception e) { DebugLog.Log("保存凭据失败：" + e.Message); return false; }
+    }
+
+    public static void DeleteSecret(string account)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows()) { WinCred.Delete(Service + ":" + account); return; }
+            if (OperatingSystem.IsMacOS()) { Run("/usr/bin/security", ["delete-generic-password", "-s", Service, "-a", account], null); return; }
+            if (Available) Run("secret-tool", ["clear", "service", Service, "host", account], null);
+        }
+        catch { }
+    }
+
     static (int Code, string Out) Run(string exe, string[] args, string? stdin)
     {
         var psi = new ProcessStartInfo(exe)

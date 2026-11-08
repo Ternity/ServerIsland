@@ -4,7 +4,7 @@ using static ServerIsland.Core.Lang;
 
 namespace ServerIsland.Core;
 
-public enum AppKind { Nep, Gnep, TorchNep, Mace, Gpumd, Vasp, Lammps, Custom }
+public enum AppKind { Nep, Gnep, TorchNep, Mace, DeepMd, Gpumd, Vasp, Lammps, Custom }
 
 /// VASP 的计算类型。
 public enum VaspMode { Md, Relax, Scf, Neb }
@@ -60,6 +60,7 @@ public sealed class AppProgress
         AppKind.Gnep => L("GNEP 训练", "GNEP training"),
         AppKind.TorchNep => L("TorchNEP 训练", "TorchNEP training"),
         AppKind.Mace => L("MACE 训练", "MACE training"),
+        AppKind.DeepMd => L("DeePMD 训练", "DeePMD training"),
         AppKind.Gpumd => L("GPUMD 模拟", "GPUMD MD"),
         AppKind.Vasp => (Vasp ?? VaspMode.Scf) switch
         {
@@ -76,7 +77,7 @@ public sealed class AppProgress
     {
         AppKind.Nep => L("代", "gen"),
         AppKind.Gnep or AppKind.TorchNep or AppKind.Mace => "epoch",
-        AppKind.Gpumd or AppKind.Lammps => L("步", "steps"),
+        AppKind.Gpumd or AppKind.Lammps or AppKind.DeepMd => L("步", "steps"),
         AppKind.Vasp => (Vasp ?? VaspMode.Scf) switch
         {
             VaspMode.Md => L("步", "steps"),
@@ -119,6 +120,10 @@ public sealed class AppProgress
             {
                 case AppKind.Nep or AppKind.Gnep or AppKind.TorchNep or AppKind.Mace:
                     if (Losses.Count > 0) parts.Add($"{Losses[0].Label} {Sci(Losses[0].V)}");
+                    break;
+                case AppKind.DeepMd:
+                    // 损失已按 能量 → 力 排好（有验证集时先验证集），摘要显示前两项
+                    foreach (var l in Losses.Take(2)) parts.Add($"{l.Label} {Sci(l.V)}");
                     break;
                 case AppKind.Gpumd or AppKind.Lammps:
                     if (Rate is { } r) parts.Add(Compact(r) + L(" 步/秒", " steps/s"));
@@ -317,6 +322,20 @@ public static class AppDetectors
             [ -f "$r" ] && tail -n 1 "$r" | sed -n 's/.*"epoch": *\([0-9][0-9]*\).*/opt=\1/p'
             tail -n 80 "$d/$ml" | grep -qa 'INFO: Training complete' && echo done=1
             echo "mtime=$(stat -c %Y "$d/$ml" "$r" 2>/dev/null | sort -n | tail -n 1)"
+          elif [ -f "$d/lcurve.out" ] && head -n 1 "$d/lcurve.out" | grep -qa '^#.*step'; then
+            printf '{{Marker}}DIR %s|%s\n' "$id" "$d"; echo kind=deepmd
+            lg=$(cd "$d" 2>/dev/null && ls -td -- log *.log *.out 2>/dev/null | grep -vx 'lcurve\.out' | head -n 5)
+            sg=$( { echo lcurve.out; printf '%s\n' "$lg"; } | while IFS= read -r x; do [ -n "$x" ] && stat -c '%Y.%s' -- "$d/$x" 2>/dev/null; done | tr '\n' ' ')
+            if si_same "$d" "$sg"; then echo same=1; else echo "sig=$sg"
+            echo "hdr=$(head -n 1 "$d/lcurve.out" | cut -c1-400)"
+            echo "last=$(tail -n 8 "$d/lcurve.out" | grep -v '^[[:space:]]*#' | tail -n 1 | cut -c1-400)"
+            printf '%s\n' "$lg" | while IFS= read -r x; do [ -f "$d/$x" ] || continue
+              s=$(head -c 3000000 "$d/$x" | grep -ao -m 1 'Start to train [0-9]* steps' | tr -dc '0-9'); t=$(tail -n 40 "$d/$x")
+              if [ -n "$s" ] || printf '%s\n' "$t" | grep -qa 'DEEPMD'; then [ -n "$s" ] && echo "logsteps=$s"
+                printf '%s\n' "$t" | grep -qa 'Trained model has been saved to\|average training time' && echo done=1; break; fi
+            done
+            cat "$d/input.json" "$d/out.json" 2>/dev/null | grep -ao '"\(numb_steps\|num_steps\|stop_batch\)"[[:space:]]*:[[:space:]]*[0-9]*' | head -n 1 | sed 's/.*:[[:space:]]*/steps=/'
+            echo "mtime=$(stat -c %Y "$d/lcurve.out" 2>/dev/null)"; fi
           elif [ -f "$d/run.in" ] && { [ -f "$d/neighbor.out" ] || [ -f "$d/thermo.out" ]; }; then
             printf '{{Marker}}DIR %s|%s\n' "$id" "$d"; echo kind=gpumd
             sg=$(stat -c '%Y.%s' "$d/run.in" "$d/neighbor.out" "$d/thermo.out" 2>/dev/null | tr '\n' ' ')
@@ -367,7 +386,7 @@ public static class AppDetectors
 
     static readonly Dictionary<string, AppKind> Kinds = new()
     {
-        ["nep"] = AppKind.Nep, ["gnep"] = AppKind.Gnep, ["torchnep"] = AppKind.TorchNep, ["mace"] = AppKind.Mace, ["gpumd"] = AppKind.Gpumd,
+        ["nep"] = AppKind.Nep, ["gnep"] = AppKind.Gnep, ["torchnep"] = AppKind.TorchNep, ["mace"] = AppKind.Mace, ["deepmd"] = AppKind.DeepMd, ["gpumd"] = AppKind.Gpumd,
         ["vasp"] = AppKind.Vasp, ["lammps"] = AppKind.Lammps, ["custom"] = AppKind.Custom,
     };
 
@@ -439,6 +458,24 @@ public static class AppDetectors
                         p.Current = done ?? 0;
                         p.Losses = me?.Values ?? [];
                         if (p.Total is { } mt2 && p.Current > mt2) return;
+                        break;
+                    }
+                    case AppKind.DeepMd:
+                    {
+                        // 目标：日志里 "Start to train N steps"（num_epochs 换算后的实际步数）优先，其次输入 JSON 的 numb_steps
+                        p.Total = Text.Dbl(kv.GetValueOrDefault("logsteps") ?? kv.GetValueOrDefault("steps")) is > 0 and var dt ? dt : null;
+                        p.HasTarget = p.Total != null;
+                        p.DataFile = "lcurve.out";
+                        var names = DeepmdLabels(kv.GetValueOrDefault("hdr") ?? "");
+                        var cols = Text.Words(kv.GetValueOrDefault("last") ?? "").ToList();
+                        if (cols.Count < 2 || cols.Count != names.Count || Text.Dbl(cols[0]) is not { } step) return;
+                        p.Current = step;
+                        if (p.Total is { } dpt && step > dpt) return;
+                        var values = new List<AppProgress.Value>();
+                        // 没有验证集时是 nan，不显示
+                        for (int i = 1; i < cols.Count; i++)
+                            if (Text.Dbl(cols[i]) is { } dv && double.IsFinite(dv)) values.Add(new AppProgress.Value(names[i], dv));
+                        p.Losses = values.Select((v, i) => (v, i)).OrderBy(x => DeepmdRank(x.v.Label)).ThenBy(x => x.i).Select(x => x.v).ToList();
                         break;
                     }
                     case AppKind.Gpumd:
@@ -591,6 +628,27 @@ public static class AppDetectors
             if (name.StartsWith("rmse_")) { name = name[5..]; name = shortNames.GetValueOrDefault(name) ?? name; }
             return name + unit;
         }).ToList();
+    }
+
+    /// DeePMD lcurve.out 的表头 → 每列的名字（含第一列 step）：
+    /// `rmse_e_val` → `RMSE E val`，`mae_f_trn` → `MAE F trn`，`rmse_val` → `RMSE val`，多任务的 `rmse_e_val_water` → `RMSE E val water`。
+    public static List<string> DeepmdLabels(string header) =>
+        Text.Words(header).Where(t => t != "#").Select(t =>
+        {
+            var name = t.StartsWith('#') ? t[1..] : t;
+            var parts = name.Split('_');
+            if (parts[0] is not ("rmse" or "mae")) return name;
+            return string.Join(" ", parts.Select(x => x is "rmse" or "mae" or "e" or "f" or "v" ? x.ToUpperInvariant() : x));
+        }).ToList();
+
+    /// 摘要和详情里的顺序：验证集在前，能量 → 力 → 维里 → 总误差，学习率最后。
+    public static int DeepmdRank(string label)
+    {
+        if (label == "lr") return 99;
+        var w = label.Split(' ');
+        var split = w.Contains("val") ? 0 : w.Contains("trn") ? 10 : 20;
+        var q = w.Contains("E") ? 0 : w.Contains("F") ? 1 : w.Contains("V") ? 2 : 3;
+        return split + q;
     }
 
     static readonly Regex MaceValueRegex = new(@"(\w+)=\s*([-+0-9.eE]+)\s*([^,=]*?)\s*(?:,|$)");

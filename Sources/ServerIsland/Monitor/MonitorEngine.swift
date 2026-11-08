@@ -28,6 +28,10 @@ final class MonitorEngine: ObservableObject {
     private var appCache: [UUID: [String: AppProgress]] = [:]
     private var appCacheRules: [ProgressRule] = []
     let history: HistoryStore
+    /// 费用账本（打开计费后，作业结束时记一笔）。
+    let costs: CostLedger
+    /// 运行中作业分到的资源（主机 → 作业号 → 资源）。Slurm 每个作业只查一次；PBS 每轮从 qstat 全文里取。
+    var allocCache: [UUID: [String: JobAlloc]] = [:]
     /// 数组作业的累计进度（key: 主机|主编号）。
     struct ArrayTrack {
         var done = 0, failed = 0, total = 0
@@ -57,11 +61,15 @@ final class MonitorEngine: ObservableObject {
     var onEvent: ((IslandEvent) -> Void)?
     /// USB 副屏（没插也照样存在，只是不发）。
     var displayLink: DisplayLink?
+    /// 手机推送（企业微信）。
+    let phonePush: PhonePush
 
     init(store: ConfigStore, demo: Bool = false) {
         self.store = store
         self.demo = demo
         history = HistoryStore(persist: store.persist && !demo)
+        costs = CostLedger(persist: store.persist && !demo)
+        phonePush = PhonePush(store: store, demo: demo)
     }
 
     // MARK: - 生命周期
@@ -255,7 +263,7 @@ final class MonitorEngine: ObservableObject {
         let withDisk = Date().timeIntervalSince(diskCheckedAt[id] ?? .distantPast) >= Self.diskInterval
         let result = await SSHRunner.run(host: host, remoteCommand: host.commands.shell,
                                          script: RemoteScript.build(for: host, appSignatures: (appCache[id] ?? [:]).compactMapValues(\.signature),
-                                                                    includeDisk: withDisk))
+                                                                    includeDisk: withDisk, alloc: allocQuery(host)))
         guard !Task.isCancelled else { snapshots[id]?.isRefreshing = false; return }
 
         var snap = snapshots[id] ?? HostSnapshot()
@@ -309,6 +317,10 @@ final class MonitorEngine: ObservableObject {
             if previous.lastUpdate == nil { await recordEndedWhileAway(host: host, now: snap) }
             history.setActive(id, snap.jobs)
         }
+        if listed, allocCache[id] != nil {
+            let ids = Set(snap.jobs.flatMap { [$0.id] + ($0.array?.running.map(\.id) ?? []) })
+            allocCache[id] = allocCache[id]?.filter { ids.contains($0.key) }
+        }
         await initializeArrays(host: host)
     }
 
@@ -341,18 +353,23 @@ final class MonitorEngine: ObservableObject {
         let gone = history.activeJobs(for: host.id).filter { !current.contains($0.id) }
         guard !gone.isEmpty else { return }
         var finals: [String: (state: JobState, raw: String, elapsed: TimeInterval?, exit: String)] = [:]
+        var allocs: [String: JobAlloc] = [:]
         let slurmIDs = gone.filter(\.slurm).map(\.id).filter { !$0.contains("[") }
         if !slurmIDs.isEmpty, !sacctUnsupported.contains(host.id) {
             let r = await SSHRunner.run(host: host, remoteCommand: host.commands.shell,
                                         script: RemoteScript.sacctScript(for: host, jobIDs: slurmIDs), timeout: 20)
-            if let sec = RemoteScript.parse(r.stdout).sections["sacct"] { finals = Parsers.sacct(sec.lines) }
+            if let sec = RemoteScript.parse(r.stdout).sections["sacct"] {
+                finals = Parsers.sacct(sec.lines)
+                allocs = Parsers.sacctAllocs(sec.lines)
+            }
         }
-        recordEndedWhileAway(host: host, gone: gone, finals: finals)
+        recordEndedWhileAway(host: host, gone: gone, finals: finals, allocs: allocs)
     }
 
     /// 查询结果与历史写入分开，便于用本地样例验证重启后的补记，不连接服务器。
     func recordEndedWhileAway(host: HostConfig, gone: [HistoryStore.ActiveJob],
-                              finals: [String: (state: JobState, raw: String, elapsed: TimeInterval?, exit: String)]) {
+                              finals: [String: (state: JobState, raw: String, elapsed: TimeInterval?, exit: String)],
+                              allocs: [String: JobAlloc] = [:]) {
         for j in gone.reversed() {
             let f = finals[j.id]
             // 数组的主编号在 sacct 里没有单独一行，按元素统计
@@ -369,6 +386,11 @@ final class MonitorEngine: ObservableObject {
             }
             history.record(host.id, HistoryEntry(id: j.id, name: j.name, state: state, elapsed: f?.elapsed ?? j.elapsed,
                                                  endedAt: j.seenAt, exitCode: f?.exit, note: note, dir: j.dir))
+            // 数组只在运行时按元素记费用，这里不补
+            if j.slurm, j.arrayTotal == nil, elems.isEmpty {
+                recordCost(host: host, id: j.id, name: j.name, partition: j.partition, alloc: JobAlloc.best(final: allocs[j.id], seen: j.alloc),
+                           nodes: j.nodes, seconds: f?.elapsed ?? j.elapsed, endedAt: j.seenAt)
+            }
         }
         DebugLog.log("[\(host.displayName)] 补记 ServerIsland 未运行时结束的任务：\(gone.map(\.id).joined(separator: " "))")
     }
@@ -504,6 +526,12 @@ final class MonitorEngine: ObservableObject {
             }
         }
         if host.kind.isScheduler {
+            if let sec = parsed.sections["alloc"] {
+                allocCache[host.id, default: [:]].merge(Parsers.allocs(sec.lines)) { _, new in new }
+            }
+            if let cache = allocCache[host.id] {
+                for i in jobs.indices where jobs[i].source == .slurm { jobs[i].alloc = cache[jobs[i].id] }
+            }
             jobs = Parsers.groupArrays(jobs)
             for i in jobs.indices { if jobs[i].array != nil { applyTrack(host: host.id, &jobs[i]) } }
         }
@@ -649,11 +677,20 @@ final class MonitorEngine: ObservableObject {
             }
             if let now = newByID[job.id] {
                 if job.state == .pending && now.state == .running {
-                    batch.append(.init(kind: .started, title: L("\(now.name) 开始运行", "\(now.name) started"), subtitle: now.detail, hostName: host.displayName, hostID: host.id, jobID: now.id))
+                    var p = PushInfo(job: now)
+                    p.elapsed = nil
+                    if let first = now.detail.components(separatedBy: " · ").first, !first.isEmpty, !first.hasPrefix("("), first != now.partition {
+                        p.nodeList = first
+                    }
+                    batch.append(.init(kind: .started, title: L("\(now.name) 开始运行", "\(now.name) started"), subtitle: now.detail, hostName: host.displayName, hostID: host.id, jobID: now.id, push: p))
                 } else if job.source == .progressFile, now.state == .completed {
-                    batch.append(.init(kind: .finished, title: L("\(now.name) 已完成", "\(now.name) finished"), subtitle: now.message ?? "", hostName: host.displayName, hostID: host.id, jobID: now.id))
+                    var p = PushInfo(job: now)
+                    p.note = now.message
+                    batch.append(.init(kind: .finished, title: L("\(now.name) 已完成", "\(now.name) finished"), subtitle: now.message ?? "", hostName: host.displayName, hostID: host.id, jobID: now.id, push: p))
                 } else if job.source == .progressFile, now.state == .failed {
-                    batch.append(.init(kind: .failed, title: L("\(now.name) 失败", "\(now.name) failed"), subtitle: now.message ?? "", hostName: host.displayName, hostID: host.id, jobID: now.id))
+                    var p = PushInfo(job: now)
+                    p.note = now.message
+                    batch.append(.init(kind: .failed, title: L("\(now.name) 失败", "\(now.name) failed"), subtitle: now.message ?? "", hostName: host.displayName, hostID: host.id, jobID: now.id, push: p))
                 }
             } else if job.source == .slurm || job.watched || (job.elapsed ?? 0) >= 30 {
                 // 很短的进程（运行不到 30 秒）来去很正常，不打扰。
@@ -670,12 +707,14 @@ final class MonitorEngine: ObservableObject {
 
         let slurmJobs = vanished.filter { $0.source == .slurm }
         var finals: [String: (state: JobState, raw: String, elapsed: TimeInterval?, exit: String)] = [:]
+        var finalAllocs: [String: JobAlloc] = [:]
         if !slurmJobs.isEmpty {
             // 只在作业从队列中消失时调用一次 sacct（sacct 查数据库，比 squeue 更重）。
             let r = await SSHRunner.run(host: host, remoteCommand: host.commands.shell,
                                         script: RemoteScript.sacctScript(for: host, jobIDs: slurmJobs.map(\.id)), timeout: 20)
             if let sec = RemoteScript.parse(r.stdout).sections["sacct"] {
                 finals = Parsers.sacct(sec.lines)
+                finalAllocs = Parsers.sacctAllocs(sec.lines)
             }
             // 作业刚离开队列时 sacct 可能还没写入最终状态（仍是 RUNNING / COMPLETING），稍等再查一次。
             let unsettled = slurmJobs.filter { finals[$0.id]?.state.isActive ?? false }
@@ -685,6 +724,7 @@ final class MonitorEngine: ObservableObject {
                                              script: RemoteScript.sacctScript(for: host, jobIDs: unsettled.map(\.id)), timeout: 20)
                 if let sec = RemoteScript.parse(r2.stdout).sections["sacct"] {
                     for (k, v) in Parsers.sacct(sec.lines) { finals[k] = v }
+                    finalAllocs.merge(Parsers.sacctAllocs(sec.lines)) { _, new in new }
                 }
             }
         }
@@ -693,6 +733,17 @@ final class MonitorEngine: ObservableObject {
             switch job.source {
             case .slurm:
                 let f = finals[job.id]
+                let alloc = JobAlloc.best(final: finalAllocs[job.id], seen: job.alloc)
+                let cost = recordCost(host: host, id: job.id, name: job.name, partition: job.partition,
+                                      alloc: alloc, nodes: job.nodes, seconds: f?.elapsed ?? job.elapsed)
+                var p = PushInfo(job: job)
+                p.setAlloc(alloc)
+                p.cost = cost.map { Billing.money($0, currency: store.settings.currency) }
+                if let f {
+                    p.state = f.raw
+                    p.exitCode = f.exit.isEmpty ? nil : f.exit
+                    if let e = f.elapsed { p.elapsed = e }
+                }
                 // 没有 sacct（集群未开启作业记录）但识别到了计算软件：用输出文件的最终状态判断成功与否。
                 if f == nil, let app = job.app {
                     var final = app
@@ -707,10 +758,13 @@ final class MonitorEngine: ObservableObject {
                                                          elapsed: job.elapsed, endedAt: Date(), exitCode: nil,
                                                          note: L("按 \(final.title) 输出判断：\(posText)", "from \(final.title) output: \(posText)"),
                                                          dir: job.workdir ?? app.dir))
+                    p.setApp(final)
+                    if !done { p.appNote = Self.appStopNote(final) }
+                    p.note = L("集群没有作业记录，按 \(final.title) 的输出判断", "no job accounting; judged from \(final.title) output")
                     batch.append(.init(kind: done ? .finished : (final.canJudge ? .failed : .info),
                                        title: "\(job.name) " + (done ? L("已完成", "finished") : (final.canJudge ? L("提前结束", "ended early") : L("已离开队列", "left the queue"))),
                                        subtitle: "\(final.title) \(posText) · #\(job.id)",
-                                       hostName: host.displayName, hostID: host.id, jobID: job.id))
+                                       hostName: host.displayName, hostID: host.id, jobID: job.id, push: p))
                     continue
                 }
                 let outcome = Self.slurmOutcome(f)
@@ -725,21 +779,24 @@ final class MonitorEngine: ObservableObject {
                                                      exitCode: f?.exit, note: note, dir: job.workdir ?? job.app?.dir))
                 let elapsed = f?.elapsed ?? job.elapsed
                 let time = elapsed.map { L("用时 ", "took ") + Format.duration($0) } ?? ""
+                if outcome.kind == .failed, let app = job.app { p.appNote = Self.appStopNote(app) }
+                if outcome.kind != .failed { p.state = nil; p.exitCode = nil }
                 switch outcome.kind {
                 case .failed:
                     batch.append(.init(kind: .failed, title: "\(job.name) \(f?.state.label ?? "")",
                                subtitle: [f?.raw.capitalized ?? "", time].filter { !$0.isEmpty }.joined(separator: " · "),
-                               hostName: host.displayName, hostID: host.id, jobID: job.id))
+                               hostName: host.displayName, hostID: host.id, jobID: job.id, push: p))
                 case .finished:
                     batch.append(.init(kind: .finished, title: L("\(job.name) 已完成", "\(job.name) finished"),
-                                       subtitle: time, hostName: host.displayName, hostID: host.id, jobID: job.id))
+                                       subtitle: time, hostName: host.displayName, hostID: host.id, jobID: job.id, push: p))
                 default:
                     // 只知道离开了队列，不能断定成功。
                     let why = f == nil ? L("集群未开启作业记录，无法确认成功或失败", "no job accounting; result unknown")
                                        : L("作业记录显示 \(f!.raw)，无法确认成功或失败", "accounting shows \(f!.raw); result unknown")
+                    p.note = why
                     batch.append(.init(kind: .info, title: L("\(job.name) 已离开队列", "\(job.name) left the queue"),
                                        subtitle: [why, time].filter { !$0.isEmpty }.joined(separator: " · "),
-                                       hostName: host.displayName, hostID: host.id, jobID: job.id))
+                                       hostName: host.displayName, hostID: host.id, jobID: job.id, push: p))
                 }
             case .process:
                 history.record(host.id, HistoryEntry(id: job.id, name: job.name, state: JobState.completed.rawValue,
@@ -755,18 +812,22 @@ final class MonitorEngine: ObservableObject {
                     if let fresh = AppDetectors.parse(r.stdout.components(separatedBy: "\n"))[job.id] { finalApp = fresh }
                     DebugLog.log("[\(host.displayName)] \(app.title)结束时的最终状态：\(finalApp?.current.map { AppProgress.compact($0) } ?? "?")/\(finalApp?.total.map { AppProgress.compact($0) } ?? "?")")
                 }
+                var p = PushInfo(job: job)
+                if let app = finalApp { p.setApp(app) }
                 if let app = finalApp, app.canJudge, let c = app.current {
                     // 计算软件：没到目标 / 没有正常结束标记就退出，基本是出错或被杀。
                     let done = app.finished
                     let folder = (app.dir as NSString).lastPathComponent
                     let pos = AppProgress.compact(c) + (app.total.map { "/" + AppProgress.compact($0) } ?? "") + " " + app.unit
+                    if !done { p.appNote = Self.appStopNote(app) }
                     batch.append(.init(kind: done ? .finished : .failed,
                                        title: app.title + (done ? L("完成", " finished") : L("提前结束", " ended early")),
                                        subtitle: (done ? pos : L("停在 ", "stopped at ") + pos) + " · " + folder,
-                                       hostName: host.displayName, hostID: host.id, jobID: job.id))
+                                       hostName: host.displayName, hostID: host.id, jobID: job.id, push: p))
                 } else {
+                    p.note = L("进程已退出（看不到退出码，无法判断成功与否）", "process exited (no exit code, so success is unknown)")
                     batch.append(.init(kind: .finished, title: L("\(job.name) 已结束", "\(job.name) ended"),
-                               subtitle: job.elapsed.map { L("运行了至少 ", "ran for at least ") + Format.duration($0) } ?? "", hostName: host.displayName, hostID: host.id, jobID: job.id))
+                               subtitle: job.elapsed.map { L("运行了至少 ", "ran for at least ") + Format.duration($0) } ?? "", hostName: host.displayName, hostID: host.id, jobID: job.id, push: p))
                 }
             case .progressFile:
                 break
@@ -780,10 +841,18 @@ final class MonitorEngine: ObservableObject {
         var ids = elements.map(\.job.id)
         ids += finished.compactMap(\.array?.baseID)
         var finals: [String: (state: JobState, raw: String, elapsed: TimeInterval?, exit: String)] = [:]
+        var finalAllocs: [String: JobAlloc] = [:]
         if !ids.isEmpty, !sacctUnsupported.contains(host.id) {
             let r = await SSHRunner.run(host: host, remoteCommand: host.commands.shell,
                                         script: RemoteScript.sacctScript(for: host, jobIDs: Array(Set(ids))), timeout: 25)
-            if let sec = RemoteScript.parse(r.stdout).sections["sacct"] { finals = Parsers.sacct(sec.lines) }
+            if let sec = RemoteScript.parse(r.stdout).sections["sacct"] {
+                finals = Parsers.sacct(sec.lines)
+                finalAllocs = Parsers.sacctAllocs(sec.lines)
+            }
+        }
+        for (base, e) in elements {
+            recordCost(host: host, id: e.id, arrayBase: base, name: e.name, partition: e.partition,
+                       alloc: JobAlloc.best(final: finalAllocs[e.id], seen: e.alloc), nodes: e.nodes, seconds: finals[e.id]?.elapsed ?? e.elapsed)
         }
         let finishedBases = Set(finished.compactMap(\.array?.baseID))
         for (base, e) in elements where !finishedBases.contains(base) {
@@ -794,9 +863,17 @@ final class MonitorEngine: ObservableObject {
                 t.failed += 1
                 if !t.alertedFailure && store.settings.arrayFirstFailureAlert {
                     t.alertedFailure = true
+                    var p = PushInfo(job: e)
+                    p.id = base
+                    p.setAlloc(finalAllocs[e.id])
+                    p.state = finals[e.id]?.raw ?? st.label
+                    p.exitCode = finals[e.id].flatMap { $0.exit.isEmpty ? nil : $0.exit }
+                    if let el = finals[e.id]?.elapsed { p.elapsed = el }
+                    p.failedElements = [Self.elementLabel(e.id, base: base)]
+                    p.note = L("其余元素还在继续；之后的失败不再单独提醒", "other elements keep running; later failures won't alert separately")
                     batch.append(.init(kind: .failed, title: L("\(e.name) 数组中有元素失败", "\(e.name): an array element failed"),
                                        subtitle: "#\(e.id) \(finals[e.id]?.raw ?? st.label)" + L(" · 之后的失败不再单独提醒", " · later failures won't alert separately"),
-                                       hostName: host.displayName, hostID: host.id, jobID: base))
+                                       hostName: host.displayName, hostID: host.id, jobID: base, push: p))
                 }
             } else {
                 t.done += 1
@@ -829,17 +906,27 @@ final class MonitorEngine: ObservableObject {
                                                  note: L("数组 ", "array ") + "\(t.done)✓ \(t.failed)✗", dir: job.workdir))
             let unconfirmed = mine.isEmpty ? L("（sacct 不可用，结果未确认）", " (no sacct; unconfirmed)")
                                            : L("（部分元素的结果还未确认）", " (some results unconfirmed)")
+            let result = L("\(t.done) 个成功", "\(t.done) done") + (t.failed > 0 ? L(" · \(t.failed) 个失败", " · \(t.failed) failed") : "") + L(" / 共 \(total) 个", " / \(total) total")
+            var p = PushInfo(job: job)
+            p.elapsed = nil
+            p.cpus = nil; p.gpus = nil; p.nodes = nil
+            p.array = result + (t.accurate ? "" : unconfirmed)
+            p.failedElements = mine.filter { [.failed, .timeout, .cancelled].contains($0.value.state) }
+                .map { Self.elementLabel($0.key, base: a.baseID) }
+                .sorted { (Int($0.dropFirst()) ?? 0) < (Int($1.dropFirst()) ?? 0) }
+            p.cost = costs.cost(host: host.id, id: a.baseID).map { Billing.money($0, currency: store.settings.currency) }
             batch.append(.init(kind: outcome.kind,
                                title: L("\(job.name) 数组已全部结束", "\(job.name): array finished"),
-                               subtitle: L("\(t.done) 个成功", "\(t.done) done") + (t.failed > 0 ? L(" · \(t.failed) 个失败", " · \(t.failed) failed") : "") + L(" / 共 \(total) 个", " / \(total) total")
-                                   + (t.accurate ? "" : unconfirmed),
-                               hostName: host.displayName, hostID: host.id, jobID: a.baseID))
+                               subtitle: result + (t.accurate ? "" : unconfirmed),
+                               hostName: host.displayName, hostID: host.id, jobID: a.baseID, push: p))
             arrayTracks[key] = nil
         }
     }
 
     /// 同一次轮询里事件太多时合并成一条，避免连续弹窗。先按提醒设置（种类、关注范围）过滤，再合并。
     private func flush(_ batch: [IslandEvent], host: HostConfig) {
+        // 手机推送有自己的范围设置（默认只推送关注的任务），先拿到完整的一批再各自过滤。
+        phonePush.consider(batch, host: store.host(host.id) ?? host, watchedPIDs: Set(host.watched.map(\.pid)))
         let batch = Self.alertable(batch, settings: store.settings, watchedPIDs: Set(host.watched.map(\.pid)))
         guard !batch.isEmpty else { return }
         if batch.count <= 2 {
@@ -860,6 +947,17 @@ final class MonitorEngine: ObservableObject {
             DebugLog.log("提醒按设置跳过：\(e.title)（范围 \(settings.alertScope.rawValue)）")
             return false
         }
+    }
+
+    /// 数组元素的显示编号：12400_17 → #17。
+    nonisolated static func elementLabel(_ id: String, base: String) -> String {
+        "#" + (id.hasPrefix(base + "_") ? String(id.dropFirst(base.count + 1)) : id)
+    }
+
+    /// 计算软件没跑完时补一句：输出文件多久之前停止更新。
+    nonisolated static func appStopNote(_ app: AppProgress, now: Date = Date()) -> String? {
+        guard let u = app.updatedAt else { return nil }
+        return L("输出文件最后更新于 ", "output last updated ") + Format.relative(u, now: now)
     }
 
     /// 同一次轮询里的多条事件合并成一条：按种类分别计数，种类取最要紧的（失败 > 警告 > 完成 > 结果未知 > 开始运行）。
@@ -1067,11 +1165,15 @@ final class MonitorEngine: ObservableObject {
         let old = snapshots[host.id] ?? HostSnapshot()
         let new = DemoData.snapshot(for: host, tick: demoTick, previous: old)
         snapshots[host.id] = new
+        if host.kind.isScheduler, costs.entries.isEmpty { costs.replaceAll(DemoData.costEntries(host: host.id)) }
         if demoTick % 30 == 0, host.kind.isScheduler {
-            emit(.init(kind: demoTick % 60 == 0 ? .failed : .finished,
-                       title: demoTick % 60 == 0 ? "eval_mmlu 失败" : "pretrain_7b 已完成",
-                       subtitle: demoTick % 60 == 0 ? "OUT_OF_MEMORY · 用时 0:42:18" : "用时 11:42:05",
-                       hostName: host.displayName, hostID: host.id))
+            let e = IslandEvent(kind: demoTick % 60 == 0 ? .failed : .finished,
+                                title: demoTick % 60 == 0 ? "eval_mmlu 失败" : "pretrain_7b 已完成",
+                                subtitle: demoTick % 60 == 0 ? "OUT_OF_MEMORY · 用时 0:42:18" : "用时 11:42:05",
+                                hostName: host.displayName, hostID: host.id)
+            // 演示模式默认不推送；SERVERISLAND_PUSH_DEMO=1 时用来试推送（见 PhonePush.consider）。
+            phonePush.consider([e], host: host)
+            emit(e)
         }
     }
 }

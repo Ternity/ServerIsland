@@ -3,6 +3,8 @@
     <RootNamespace>ServerIsland.Core</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
     <PackageReference Include="SSH.NET" Version="2026.0.0" />
+    <PackageReference Include="System.IO.Ports" Version="10.0.14" />
   </ItemGroup>
 </Project>

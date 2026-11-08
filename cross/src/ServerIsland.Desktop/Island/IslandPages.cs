@@ -14,7 +14,7 @@ using static ServerIsland.Desktop.Ui.Kit;
 namespace ServerIsland.Desktop.Island;
 
 /// 展开面板里的二级页面（与 Swift 版 IslandPages.swift 对应）。每个页面固定高 IslandLayout.PageHeight。
-public sealed class IslandPages(MonitorEngine engine, IslandState st)
+public sealed partial class IslandPages(MonitorEngine engine, IslandState st)
 {
     void Back() => st.Page = IslandPage.List;
 
@@ -89,8 +89,14 @@ public sealed class IslandPages(MonitorEngine engine, IslandState st)
         var header = PageHeader(job.Name, $"{host.DisplayName} · {kindText}" + (stillListed ? "" : L(" · 已不在列表中", " · no longer listed")), BackFromJob, trailing);
 
         if (job.Array is { } a)
+        {
+            if (CostText(host, job) is { } ct)
+                return Rows("Auto,8,Auto,8,*,10,30", header,
+                    H(6, new Icon(Billing.IconFor(engine.Store.Settings.Currency), 11, Hue.Secondary.B(), 1.8), T(ct, 10.5, color: Hue.Secondary)),
+                    ArrayOverview(job, a, openElement), DangerZone(host, job, sampledAt, stillListed, s));
             return Rows("Auto,10,*,10,30", header, ArrayOverview(job, a, openElement), DangerZone(host, job, sampledAt, stillListed, s));
-        var parts = new List<Control> { header, Fields(job, s) };
+        }
+        var parts = new List<Control> { header, Fields(host, job, s) };
         var spec = "Auto,10,Auto,10";
         if (s.Curves.Count > 0)
         {
@@ -158,6 +164,7 @@ public sealed class IslandPages(MonitorEngine engine, IslandState st)
                     AppKind.Gpumd => L("，run.in 无 run 步数", ", no run steps in run.in"),
                     AppKind.Nep or AppKind.Gnep => L("，未设目标按默认值", ", default target"),
                     AppKind.TorchNep or AppKind.Mace => L("，没读到总 epoch", ", total epochs unknown"),
+                    AppKind.DeepMd => L("，没读到总步数", ", total steps unknown"),
                     AppKind.Vasp => a.Vasp == VaspMode.Relax ? L("（收敛前不知道总步数）", " (total unknown until converged)") : "",
                     _ => "",
                 };
@@ -177,11 +184,13 @@ public sealed class IslandPages(MonitorEngine engine, IslandState st)
         return f;
     }
 
-    Control Fields(RemoteJob job, JobDetailState s)
+    Control Fields(HostConfig host, RemoteJob job, JobDetailState s)
     {
         var all = AppFields(job);
+        // 费用整行显示（见下面的 longKeys），不会因为字段太多被截掉
+        if (CostText(host, job) is { } cost) all.Insert(0, (L("费用", "Cost"), cost));
         foreach (var kv in s.Detail?.Fields ?? []) if (!all.Any(x => x.Item1 == kv.Key)) all.Add((kv.Key, kv.Value));
-        var longKeys = new HashSet<string> { L("命令", "Command"), L("工作目录", "Directory"), L("资源", "Resources"), L("节点", "Nodes"), "Loss",
+        var longKeys = new HashSet<string> { L("命令", "Command"), L("工作目录", "Directory"), L("资源", "Resources"), L("节点", "Nodes"), "Loss", L("费用", "Cost"),
                                              L("近邻", "Neighbors"), L("进度", "Progress"), L("排队原因", "Pending reason") };
         var shortF = all.Where(x => !longKeys.Contains(x.Item1)).Take(job.App == null ? 8 : 10).ToList();
         var wide = all.Where(x => longKeys.Contains(x.Item1)).ToList();
@@ -422,13 +431,19 @@ public sealed class IslandPages(MonitorEngine engine, IslandState st)
             int failed = es.Count(e => e.JobState is JobState.Failed or JobState.Timeout);
             int done = es.Count(e => e.JobState == JobState.Completed);
             trailing = H(8, H(3, new Icon("check", 10, Hue.Mint.B(), 3), T($"{done}", 11, FontWeight.SemiBold, Hue.Mint)),
-                            H(3, new Icon("xmark", 10, (failed > 0 ? Hue.Coral : Hue.Tertiary).B(), 3), T($"{failed}", 11, FontWeight.SemiBold, failed > 0 ? Hue.Coral : Hue.Tertiary)));
+                            H(3, new Icon("xmark", 10, (failed > 0 ? Hue.Coral : Hue.Tertiary).B(), 3), T($"{failed}", 11, FontWeight.SemiBold, failed > 0 ? Hue.Coral : Hue.Tertiary)),
+                            engine.BillingActive(host) && es.Sum(e => engine.Costs.CostOf(host.Id, e.Id) ?? 0) is var total
+                                ? T(Billing.Money(total, engine.Store.Settings.Currency), 11, FontWeight.SemiBold, total > 0 ? Hue.Amber : Hue.Tertiary)
+                                    .Tip(L("列表里这些任务的估算费用合计", "Estimated total for the jobs listed"))
+                                : null);
         }
         var list = V(4);
         if (s.Entries is { } entries)
         {
             if (entries.Count == 0) list.Children.Add(Centered(L("还没有结束的任务", "No finished jobs yet")));
-            foreach (var e in entries) list.Children.Add(HistoryRow(host, e));
+            bool billing = engine.BillingActive(host);
+            foreach (var e in entries)
+                list.Children.Add(HistoryRow(host, e, billing ? engine.Costs.CostOf(host.Id, e.Id) : null, billing, engine.Store.Settings.Currency));
         }
         else list.Children.Add(Loading());
         return Rows("Auto,10,*", PageHeader(L("历史记录", "History"), host.DisplayName + " · " + source, Back, trailing), Scroll(list));
@@ -443,7 +458,7 @@ public sealed class IslandPages(MonitorEngine engine, IslandState st)
         st.RequestRebuild();
     }
 
-    static Control HistoryRow(HostConfig host, HistoryEntry e)
+    static Control HistoryRow(HostConfig host, HistoryEntry e, double? cost, bool billing, string currency)
     {
         var state = e.JobState;
         bool unknown = e.State == HistoryEntry.EndedUnknown;
@@ -464,6 +479,13 @@ public sealed class IslandPages(MonitorEngine engine, IslandState st)
         var when = T(Format.Relative(e.EndedAt), 10.5, color: Hue.Tertiary).W(58).Tip(e.EndedAt.ToString("g"));
         when.TextAlignment = TextAlignment.Right;
         right.Children.Add(el);
+        if (billing)
+        {
+            var ct = T(cost is { } v ? Billing.Money(v, currency) : "—", 10.5, FontWeight.Medium, cost == null ? Hue.Tertiary : Hue.Amber).W(62)
+                .Tip(L("估算费用（按结束时的单价）", "Estimated cost (at the price when it ended)"));
+            ct.TextAlignment = TextAlignment.Right;
+            right.Children.Add(ct);
+        }
         right.Children.Add(when);
         Control top = Row(6, Fill(left), right);
         if (e.Dir is not { Length: > 0 } dir) return RoundedCard(top, 10, Hue.Card, 0).WithPadding(10, 6);

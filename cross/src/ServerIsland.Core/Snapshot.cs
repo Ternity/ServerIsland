@@ -91,6 +91,11 @@ public sealed class RemoteJob
     public string? Reason;
     /// 工作目录（作业：调度系统记录的；进程：当前目录）。写进历史记录，之后可以直接打开。
     public string? Workdir;
+    /// 分区（Slurm 的 %P，PBS 的队列）和节点数（%D）：计费用。
+    public string? Partition;
+    public int? Nodes;
+    /// 调度系统分配的资源（打开计费后才查询）。
+    public JobAlloc? Alloc;
 
     public RemoteJob() { }
 
@@ -222,7 +227,7 @@ public sealed class HostSnapshot
 public enum EventKind { Finished, Failed, Started, Info, Warning }
 
 /// 刘海弹出提示。
-public sealed class IslandEvent(EventKind kind, string title, string subtitle, string hostName, Guid? hostID = null, string? jobID = null)
+public sealed class IslandEvent(EventKind kind, string title, string subtitle, string hostName, Guid? hostID = null, string? jobID = null, PushInfo? push = null)
 {
     public Guid Id { get; } = Guid.NewGuid();
     public EventKind Kind { get; } = kind;
@@ -232,7 +237,81 @@ public sealed class IslandEvent(EventKind kind, string title, string subtitle, s
     public string Title { get; } = title;
     public string Subtitle { get; } = subtitle;
     public string HostName { get; } = hostName;
-    public DateTime Date { get; } = DateTime.Now;
+    public DateTime Date { get; init; } = DateTime.Now;
+    /// 手机推送用的详细信息（刘海和系统通知不用）。
+    public PushInfo? Push { get; } = push;
+}
+
+/// 任务提醒的细节：生成事件时已经知道的信息（不额外查询服务器）。查不到的项留空，推送时不显示那一行。和 Mac 版 PushInfo 一致。
+public sealed class PushInfo
+{
+    public JobSource Source = JobSource.Slurm;
+    /// 显示用的编号（数组是主编号）。
+    public string? Id;
+    public string? Partition;
+    public string? NodeList;
+    public int? Nodes, Cpus, Gpus;
+    /// 调度系统给的原始状态（OUT_OF_MEMORY、TIMEOUT、CANCELLED by 123…）。
+    public string? State;
+    public string? ExitCode;
+    public double? Elapsed;
+    /// 进程只知道"至少运行了多久"。
+    public bool ElapsedAtLeast;
+    public double? Limit;
+    public string? Dir;
+    /// "GNEP 训练：200/200 epoch · loss 1.23e-2"
+    public string? App;
+    public string? AppNote;
+    /// 进程最后一次采样："CPU 98% · 内存 12.3 GB · 显存 18.2 GB"
+    public string? Sample;
+    public string? Cost;
+    /// 数组的结果："98 个成功 · 2 个失败 / 共 100 个"
+    public string? Array;
+    public List<string> FailedElements = [];
+    public string? Note;
+    public bool Watched;
+
+    public PushInfo() { }
+
+    /// 从任务本身填好通用的几项。
+    public PushInfo(RemoteJob job)
+    {
+        Source = job.Source;
+        Id = job.Array?.BaseID ?? job.Id;
+        Partition = job.Partition;
+        Nodes = job.Alloc?.Nodes ?? job.Nodes;
+        Cpus = job.Alloc?.Cpus;
+        Gpus = job.Alloc?.Gpus;
+        Elapsed = job.Elapsed;
+        Limit = job.Limit;
+        Dir = job.Workdir ?? job.App?.Dir;
+        Watched = job.Watched;
+        if (job.App is { } app) SetApp(app);
+        if (job.Source == JobSource.Process)
+        {
+            ElapsedAtLeast = true;
+            var parts = new List<string>();
+            if (job.CpuPercent is { } c) parts.Add($"CPU {(int)Math.Round(c)}%");
+            if (job.MemoryBytes is { } m && m > 0) parts.Add(Lang.L("内存 ", "mem ") + Format.Bytes(m));
+            if (job.GpuMemoryMB is { } g && g > 0) parts.Add(Lang.L("显存 ", "GPU mem ") + Format.Bytes(g * 1024 * 1024));
+            Sample = parts.Count == 0 ? null : string.Join(" · ", parts);
+        }
+    }
+
+    public void SetApp(AppProgress app)
+    {
+        var s = app.Summary;
+        App = app.Title + (s.Length == 0 ? "" : Lang.L("：", ": ") + s);
+        Dir ??= app.Dir;
+    }
+
+    public void SetAlloc(JobAlloc? a)
+    {
+        if (a == null) return;
+        if (a.Nodes is { } n) Nodes = n;
+        if (a.Cpus is { } c) Cpus = c;
+        if (a.Gpus is { } g) Gpus = g;
+    }
 }
 
 /// 已结束任务的记录（用于"最近 24 小时"）。

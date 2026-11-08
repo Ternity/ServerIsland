@@ -200,7 +200,8 @@ enum PreviewRenderer {
         store.settings.quietHours = false
         // 副屏页（打开"外接副屏"后才出现；没有连接时板子设置那组不显示）
         store.settings.usbDisplay = true
-        settingsShot("settings-display", .display, dark: true, height: 900)
+        engine.displayLink = DisplayLink(engine: engine, store: store)
+        settingsShot("settings-display", .display, dark: true, height: 2600)
         settingsShot("settings-campus", .display, dark: true, height: 1000, campusOnly: true)
         store.settings.usbDisplay = false
         store.settings.hosts[0].pathFilter = "~/projects/LiCoO2"
@@ -364,6 +365,42 @@ enum PreviewRenderer {
 
         store.settings.progressRules = [r1, r2]
         settingsShot("settings-rules", .rules, dark: true)
+
+        // 计费：打开后头部多一个钱币按钮；费用页、详情页和历史页显示估算费用；设置里的计费页。其他截图保持关闭。
+        store.settings.billingEnabled = true
+        let costHost = store.settings.hosts[0]
+        engine.costs.replaceAll(DemoData.costEntries(host: costHost.id))
+        page("costs", CostPage(engine: engine, store: store, onBack: {}, onOpenSettings: {}))
+        if let md = engine.snapshots[costHost.id]?.jobs.first(where: { $0.id == "8812044" }) {
+            page("detail-cost", JobDetailPage(host: costHost, job: md, sampledAt: Date(), stillListed: true, engine: engine,
+                                              onBack: {}, openSettings: {}, preloaded: detail))
+        }
+        if let eosJob = engine.snapshots[costHost.id]?.jobs.first(where: { $0.array != nil }) {
+            page("detail-cost-array", JobDetailPage(host: costHost, job: eosJob, sampledAt: Date(), stillListed: true, engine: engine,
+                                                    onBack: {}, openSettings: {}))
+        }
+        page("history-cost", HistoryPage(host: costHost, engine: engine, onBack: {}, preloaded: [
+            HistoryEntry(id: "8811911", name: "relax_Li3PS4_pbe", state: "COMPLETED", elapsed: 7_560, endedAt: now.addingTimeInterval(-1_800), exitCode: "0:0"),
+            HistoryEntry(id: "8811912", name: "phonon_LiCoO2_222", state: "OUT_OF_MEMORY", elapsed: 2_520, endedAt: now.addingTimeInterval(-5_400), exitCode: "0:125"),
+            HistoryEntry(id: "8811914", name: "gpumd_kappa_250K", state: "COMPLETED", elapsed: 41_400, endedAt: now.addingTimeInterval(-90_000), exitCode: "0:0"),
+            HistoryEntry(id: "8811901", name: "neb_Li_vacancy", state: "CANCELLED by 1000", elapsed: 412, endedAt: now.addingTimeInterval(-30_000), exitCode: "0:15"),
+        ], preloadedCosts: ["8811911": 10.08, "8811912": 1.79, "8811914": 28.75]))
+        shot("expanded-billing", hovering: true, height: 560)
+        settingsShot("settings-billing", .billing, dark: true, height: 900)
+        settingsShot("settings-billing-light", .billing, dark: false, height: 900)
+        store.settings.billingEnabled = false
+        settingsShot("settings-billing-off", .billing, dark: true, height: 420)
+        // 手机推送：没填 key / 已开启（Agent 打开）/ 浅色
+        settingsShot("settings-push-empty", .push, dark: true, height: 900)
+        engine.phonePush.previewState(key: "a1b2c3d4-0000-1111-2222-33334444f00d",
+                                      status: .init(date: Date().addingTimeInterval(-120), ok: true, message: L("测试消息已发送", "Test message sent")))
+        store.settings.phonePush.enabled = true
+        store.settings.phonePush.agents = true
+        store.settings.quietHours = true
+        settingsShot("settings-push", .push, dark: true, height: 1100)
+        store.settings.phonePush.agents = false
+        settingsShot("settings-push-light", .push, dark: false, height: 900)
+        store.settings.quietHours = false
         let sheet = RuleEditorSheetPreview(rule: r1, hosts: store.settings.hosts, engine: engine)
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
         w.appearance = NSAppearance(named: .darkAqua)

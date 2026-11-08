@@ -55,7 +55,7 @@ public static class AppCurves
     public static List<Source> SourcesFor(AppProgress app) => app.Kind switch
     {
         AppKind.Nep or AppKind.Gnep => [new Source(app.Dir + "/loss.out", CurveKind.Loss, app.Kind)],
-        AppKind.TorchNep or AppKind.Mace => app.DataFile is { } f ? [new Source(app.Dir + "/" + f, CurveKind.Loss, app.Kind)] : [],
+        AppKind.TorchNep or AppKind.Mace or AppKind.DeepMd => app.DataFile is { } f ? [new Source(app.Dir + "/" + f, CurveKind.Loss, app.Kind)] : [],
         AppKind.Vasp when app.Vasp == VaspMode.Relax => [new Source(app.Dir + "/OSZICAR", CurveKind.VaspEnergy), new Source(app.Dir + "/OUTCAR", CurveKind.VaspForce)],
         AppKind.Vasp when app.Vasp == VaspMode.Neb => [new Source(app.Dir, CurveKind.Neb)],
         _ => [],
@@ -272,6 +272,7 @@ public static class AppCurves
                 Note = ediffg is >= 0 ? L($"按能量收敛 ΔE < {AppProgress.Sci(ediffg.Value)} eV", $"energy criterion ΔE < {AppProgress.Sci(ediffg.Value)} eV") : null,
             };
         }
+        if (src.IsLoss && src.App == AppKind.DeepMd) return DeepmdCurve(rows, extra?.GetValueOrDefault("head") ?? "");
         if (src.IsLoss)
         {
             extra ??= [];
@@ -335,6 +336,35 @@ public static class AppCurves
             LogY = false,
             XLabel = L("离子步", "ionic step"),
         };
+    }
+
+    /// DeePMD lcurve.out：能量、力、维里各画一条，有验证集用验证集（多任务取第一个任务），没有就用训练集；
+    /// 三项都没有时画总误差。续跑（--restart）时 lcurve.out 追加写入，步数接着数；从较早的检查点续跑时去掉重跑的那段。
+    public static AppCurve? DeepmdCurve(List<double[]> rows, string header)
+    {
+        var names = AppDetectors.DeepmdLabels(header);
+        var data = Monotonic(rows.Where(r => r.Length == names.Count).ToList());
+        List<(double, double)> Points(int i) => data.Where(r => double.IsFinite(r[i]) && r[i] > 0).Select(r => (r[0], r[i])).ToList();
+        int? Column(string? q, string split)
+        {
+            for (int i = 1; i < names.Count; i++)
+            {
+                var w = names[i].Split(' ');
+                var hasQ = q != null ? w.Contains(q) : !w.Any(x => x is "E" or "F" or "V");
+                if (w.Contains(split) && hasQ && Points(i).Count >= 2) return i;
+            }
+            return null;
+        }
+        var series = new List<AppCurve.Series>();
+        foreach (var (q, name) in new[] { ("E", L("能量", "Energy")), ("F", L("力", "Force")), ("V", L("维里", "Virial")) })
+        {
+            if (Column(q, "val") is { } i) series.Add(new AppCurve.Series(name, Downsample(Points(i))));
+            else if (Column(q, "trn") is { } j) series.Add(new AppCurve.Series(name + L("（训练集）", " (train)"), Downsample(Points(j))));
+        }
+        if (series.Count == 0 && (Column(null, "val") ?? Column(null, "trn")) is { } k)
+            series.Add(new AppCurve.Series(names[k], Downsample(Points(k))));
+        if (series.Count == 0) return null;
+        return new AppCurve { Title = "Loss", SeriesList = series, LogY = true, XLabel = L("步", "step") };
     }
 
     /// 横轴倒退（从较早的检查点续跑，日志 / loss.out 是追加写入的）时，丢掉之前跑过、又被重跑的那一段。

@@ -46,13 +46,13 @@ ServerIsland 是一个菜单栏 / 刘海（灵动岛风格）App：通过 SSH �
 ```
 Sources/ServerIsland/
   App/        main.swift（命令行开关）、AppDelegate（菜单栏、通知）、SelfTest / SelfTestApps（自检、诊断）、PreviewRenderer（离屏渲染预览图）
-  Models/     Config.swift（全部设置项，Codable，缺字段自动补默认值）、ConfigTransfer（设置导入导出）、Snapshot.swift（运行时数据）、ProgressRule（自定义进度识别规则）
+  Models/     Config.swift（全部设置项，Codable，缺字段自动补默认值）、ConfigTransfer（设置导入导出）、Snapshot.swift（运行时数据）、ProgressRule（自定义进度识别规则）、Billing（计费：单价、TRES 解析、费用账本、汇总）
   SSH/        SSHRunner（ssh 调用、连接复用、错误归类、PATH 补全）、AskPass（密码弹窗、记住密码、自动重新登录）、SSHHosts（手动服务器和跳板机的私有 ssh 配置）、Keychain、SSHConfigParser
-  Monitor/    MonitorEngine（轮询循环、事件识别）、+Actions（详情、取消、历史、监听、登录、检查命令）
+  Monitor/    MonitorEngine（轮询循环、事件识别）、+Actions（详情、取消、历史、监听、登录、检查命令）、PhonePush（企业微信推送：过滤、合并、限速、消息格式）
               RemoteScript（远端脚本生成与解析）、Parsers、AppDetectors（NEP/GPUMD/VASP/LAMMPS/自定义规则）、AppCurves（详情页曲线，增量读取）、PendingReason、Partitions、HistoryStore、DemoData
-  Notch/      IslandController（NSPanel、悬停、点击穿透）、IslandView（根视图、收起两翼、弹窗、展开面板）
+  Notch/      IslandController（NSPanel、悬停、点击穿透）、IslandView（根视图、收起两翼、弹窗、展开面板）、CostPage（费用页）
               IslandLayout（确定性尺寸）、HostCard、IslandPages（详情、历史、监听、全部任务、分区、数组概览）、CurveChart、NotchGeometry
-  Settings/   SettingsView（窗口、侧栏、通用页）、HostDetailView（单台服务器页）、ProgressRulesView（进度识别页、规则编辑与测试）、SettingsControls（间隔选择、开机启动、标题）
+  Settings/   SettingsView（窗口、侧栏、通用页）、HostDetailView（单台服务器页）、ProgressRulesView（进度识别页、规则编辑与测试）、BillingSettingsView（计费页、分区单价）、PhonePushSettingsView（手机推送页）、SettingsControls（间隔选择、开机启动、标题）
   Shared/     Localization（L()、HelpLabel）、Pet（Tako 精灵）、Theme、Components、Format、SoundPlayer、DebugLog
 Resources/    Info.plist、AppIcon.icns、Sounds/*.wav
 Branding/     logo.svg、menubar.svg（由 scripts/gen_branding.py 生成）及导出的 PNG
@@ -74,7 +74,7 @@ references/   专题文档（见下）
 
 ```bash
 swift build                                          # 调试构建（会打印 "xcrun: error: PlatformPath" 两行，属于无害噪音）
-.build/debug/ServerIsland --selftest                 # 解析 / 脚本自检（目前 198 项，应全部 ✓；其中计算软件识别会用本机 bash 跑假文件，连接部分会调用本机 ssh -G）
+.build/debug/ServerIsland --selftest                 # 解析 / 脚本自检（目前 298 项，应全部 ✓；其中计算软件识别会用本机 bash 跑假文件，连接部分会调用本机 ssh -G）
 ./scripts/build_app.sh --run                         # release 构建 + 打包 + 重启 App
 ./scripts/install_local.sh                           # release 构建并替换本机的 /Applications/ServerIsland.app，然后启动
 ./scripts/package_all.sh                             # 三个平台的安装包（DMG / win-x64.zip / linux-x64.tar.gz）+ 替换本机 Mac 版，最后打印 SHA-256
@@ -83,6 +83,7 @@ swift build                                          # 调试构建（会打印 
 ./scripts/site_shots.sh                              # 重新生成官网截图
 ./scripts/readme_assets.sh                           # 重新生成 README 的动图、截图和原理图（docs/）
 .build/debug/ServerIsland --diagnose <别名> slurm+    # 对真实服务器跑一次完整采集并打印（slurm | pbs | direct | slurm+）
+.build/debug/ServerIsland --push-preview [zh|en]      # 打印手机推送的示例消息（不联网）
 .build/debug/ServerIsland --dump-scripts <目录>       # 导出远端脚本，和 C# 版逐字比较（见 cross-platform.md）
 .build/debug/ServerIsland --curve <别名> <目录> [gnep|vasp]  # 只读：读两次详情页曲线，检查增量读取
 .build/debug/ServerIsland --test-update <临时目录>     # 在临时目录里走一遍自动更新（假的 App 和 DMG）；C# 版同名命令用假的 zip / tar.gz
@@ -92,10 +93,11 @@ open build/ServerIsland.app --args --demo            # 演示模式
 Windows / Linux 版（在 `cross/src/ServerIsland.Desktop` 下运行）：
 
 ```bash
-dotnet build && dotnet run -- --selftest             # 自检（Mac 上 202 项，含和 Swift 版对应的检查；Windows / Linux 上更多）
+dotnet build && dotnet run -- --selftest             # 自检（Mac 上 307 项，含和 Swift 版对应的检查；Windows / Linux 上更多）
 dotnet run -- --render-preview <目录> [zh|en]          # 离屏预览图（刘海各状态、各页面、设置窗口浅色 / 深色、图标表）
 dotnet run -- --ui-smoke <目录>                       # 在真实窗口上走一遍界面并截图，输出 OK 或错误
 dotnet run -- --demo                                  # 演示模式
+dotnet run -- --push-preview [zh|en]                  # 打印手机推送的示例消息，应和 Swift 版逐字一致
 SERVERISLAND_SSH=managed dotnet run -- --diagnose <别名> slurm+   # 用内置 SSH 只读采集一次
 cross/scripts/publish.sh                              # → build/ServerIsland-<版本>-win-x64.zip、-linux-x64.tar.gz
 cross/scripts/build_mac_preview.sh --run              # 打包并在 Mac 上试用跨平台版（会先退出 Swift 版）

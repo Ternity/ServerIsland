@@ -6,7 +6,7 @@ struct CampusNetworkSection: View {
     @ObservedObject var link: DisplayLink
     @State private var ssid = ""
     @State private var wifiPassword = ""
-    @State private var share = true
+    @State private var share = false
     @State private var apName = "ServerIsland"
     @State private var apPassword = ""
     @State private var remember = false

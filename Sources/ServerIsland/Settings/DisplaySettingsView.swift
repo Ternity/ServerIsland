@@ -21,6 +21,13 @@ struct DisplaySettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                if let link, link.connected, let b = link.battery, b.percent >= 0 {
+                    LabeledContent(L("板子电量", "Board Battery")) {
+                        Label("\(b.percent)%" + (b.charging ? L("，充电中", ", charging") : (b.usb ? L("，已插电", ", plugged in") : "")),
+                              systemImage: b.charging ? "battery.100.bolt" : (b.percent <= 15 ? "battery.25" : "battery.75"))
+                            .foregroundStyle(!b.usb && b.percent <= 15 ? .orange : .secondary)
+                    }
+                }
                 Toggle(isOn: Binding(get: { store.settings.displayBluetooth }, set: { on in
                     store.settings.displayBluetooth = on
                     // 插着 USB 时顺便让板子打开蓝牙广播。
@@ -64,8 +71,8 @@ struct DisplaySettingsView: View {
                         .foregroundStyle(.secondary)
                 } label: {
                     HelpLabel(L("AI 用量", "AI Usage"),
-                              help: L("只读 CC Switch 的本地记录（~/.cc-switch），每分钟更新副屏上的调用、token 和费用。",
-                                      "Reads CC Switch's local log (~/.cc-switch, read-only) and updates calls, tokens and cost on the display every minute."))
+                              help: L("只读 CC Switch 的本地记录（~/.cc-switch），每 3 分钟更新副屏上的调用、token 和费用。",
+                                      "Reads CC Switch's local log (~/.cc-switch, read-only) and updates calls, tokens and cost on the display every 3 minutes."))
                 }
             } header: { SettingsHeader(title: L("AI 用量", "AI Usage"), symbol: "chart.bar.xaxis", tint: .green) }
         }
@@ -82,11 +89,11 @@ private struct BoardSettingsSection: View {
         Binding(get: { link.board[key] ?? fallback }, set: { link.setBoard(key, $0) })
     }
 
-    private func soundBit(_ bit: Int) -> Binding<Bool> {
-        Binding(get: { (link.board["sound"] ?? 9) & bit != 0 },
+    private func soundBit(_ bit: Int, key: String = "sound", fallback: Int = 9) -> Binding<Bool> {
+        Binding(get: { (link.board[key] ?? fallback) & bit != 0 },
                 set: { on in
-                    let m = link.board["sound"] ?? 9
-                    link.setBoard("sound", on ? m | bit : m & ~bit)
+                    let m = link.board[key] ?? fallback
+                    link.setBoard(key, on ? m | bit : m & ~bit)
                 })
     }
 
@@ -119,13 +126,45 @@ private struct BoardSettingsSection: View {
                 Text(L("5 分钟", "5 minutes")).tag(300)
                 Text(L("从不", "Never")).tag(0)
             }
+            Toggle(isOn: Binding(get: { (link.board["brightOnPower"] ?? 1) != 0 }, set: { link.setBoard("brightOnPower", $0 ? 1 : 0) })) {
+                HelpLabel(L("插电时不调暗", "Stay Bright on Power"),
+                          help: L("插着电时，没操作回到时钟后也保持上面的亮度（最高 40%，减少 OLED 老化）；用电池时照旧调暗省电。需要固件 0.4.2。",
+                                  "On power, the clock keeps the brightness above after it returns from inactivity (capped at 40% to limit OLED wear); on battery it still dims to save power. Needs firmware 0.4.2."))
+            }
+            Picker(selection: value("saver", 0)) {
+                Text(L("表盘", "Clock face")).tag(0)
+                Text(L("手表", "Watch")).tag(1)
+                Text(L("信息条", "Bars")).tag(2)
+                Text(L("进度环", "Ring")).tag(3)
+                Text(L("Tako 说", "Tako says")).tag(4)
+                Text(L("轮换", "Rotate")).tag(5)
+            } label: {
+                HelpLabel(L("插电待机时显示", "On Power, When Idle"),
+                          help: L("插着电、没操作一段时间后显示什么。表盘：你选的表盘，会轻微挪动防烧屏。手表：Tako、大时间和三个小圆环。信息条：大时间和三条横条（最快任务、运行 / 排队、AI 今天）。进度环：外圈是最快任务的进度，写着几点结束。Tako 说：大 Tako 加一两句话。轮换：这四种每 10 分钟换一种。屏保整个画面会缓慢漂移，摸一下回到表盘。需要固件 0.4.6。",
+                                  "What the display shows on power after a while without touches. Clock face: your chosen face, shifted slightly to avoid burn-in. Watch: Tako, a large clock and three small rings. Bars: a large clock and three bars (furthest job, running / queued, AI today). Ring: the outer ring is the furthest job's progress, with its end time. Tako says: a big Tako and a sentence or two. Rotate: cycles through these four every 10 minutes. Screensavers drift slowly; tap to return. Needs firmware 0.4.6."))
+            }
+            Toggle(L("装饰效果（任务完成撒彩带、下雨下雪）", "Effects (Confetti, Rain, Snow)"), isOn: Binding(get: { (link.board["effects"] ?? 1) != 0 }, set: { link.setBoard("effects", $0 ? 1 : 0) }))
             Toggle(L("用电池时时钟常亮", "Keep Clock On (Battery)"), isOn: Binding(get: { (link.board["standbyOnBattery"] ?? 0) != 0 },
                                                                                set: { link.setBoard("standbyOnBattery", $0 ? 1 : 0) }))
-            Picker(L("夜间熄屏", "Night Mode"), selection: value("night", 0)) {
-                Text(L("关", "Off")).tag(0)
-                Text(L("22–7 点", "10pm–7am")).tag(1)
-                Text(L("23–7 点", "11pm–7am")).tag(2)
-                Text(L("0–8 点", "12am–8am")).tag(3)
+            Toggle(isOn: Binding(get: { (link.board["night"] ?? 0) != 0 }, set: { link.setBoard("night", $0 ? 1 : 0) })) {
+                HelpLabel(L("夜间熄屏", "Night Mode"),
+                          help: L("这段时间里调暗后直接熄屏，任务提醒不亮屏也不响（会记进提醒记录）；计时器照常响。",
+                                  "During these hours the screen turns off instead of dimming and job alerts stay silent (they are still logged). Timers still ring."))
+            }
+            if (link.board["night"] ?? 0) != 0 {
+                HStack {
+                    Picker(L("从", "From"), selection: value("nightFrom", 23)) {
+                        ForEach(0..<24, id: \.self) { Text(String(format: "%02d:00", $0)).tag($0) }
+                    }
+                    Picker(L("到", "To"), selection: value("nightTo", 7)) {
+                        ForEach(0..<24, id: \.self) { Text(String(format: "%02d:00", $0)).tag($0) }
+                    }
+                }
+                Toggle(isOn: Binding(get: { (link.board["nightClock"] ?? 0) != 0 }, set: { link.setBoard("nightClock", $0 ? 1 : 0) })) {
+                    HelpLabel(L("插电时显示很暗的小时钟", "Dim Small Clock on Power"),
+                              help: L("夜间插着电时不熄屏，只显示一个很暗的小时间，每分钟换个位置。需要固件 0.4.7。",
+                                      "At night on power, shows a very dim small clock that moves every minute instead of turning off. Needs firmware 0.4.7."))
+                }
             }
             Picker(selection: value("sit", 0)) {
                 Text(L("关", "Off")).tag(0)
@@ -136,6 +175,18 @@ private struct BoardSettingsSection: View {
             } label: {
                 HelpLabel(L("久坐提醒", "Break Reminder"), help: L("电脑没锁屏的时候，每隔这么久提醒你起来活动一下（夜间不提醒，锁屏后重新计时）。",
                                                                "While your Mac is unlocked, reminds you to get up every so often (not at night; restarts after you lock)."))
+            }
+            LabeledContent(L("全屏提醒", "Full-screen Alerts")) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle(L("Agent 需要你确认", "Agent needs you"), isOn: soundBit(8, key: "popup", fallback: 31))
+                    Toggle(L("Agent 回答完了", "Agent is done"), isOn: soundBit(16, key: "popup", fallback: 31))
+                    Toggle(L("服务器任务完成", "Job finished"), isOn: soundBit(2, key: "popup", fallback: 31))
+                    Toggle(L("任务失败、磁盘警告", "Job failed, disk warning"), isOn: soundBit(4, key: "popup", fallback: 31))
+                    Toggle(L("计时器、久坐、截止日期", "Timer, break, deadline"), isOn: soundBit(1, key: "popup", fallback: 31))
+                    Text(L("关闭后仍记入提醒记录，声音单独设置", "Alerts stay in history; sounds are separate"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .toggleStyle(.checkbox)
             }
             LabeledContent(L("提示音", "Sounds")) {
                 VStack(alignment: .leading, spacing: 4) {

@@ -166,10 +166,16 @@ enum SelfTestMonitor {
         let restored = (try? JSONSerialization.jsonObject(with: Data(contentsOf: hookFile))) as? NSDictionary
         let originalObj = (try? JSONSerialization.jsonObject(with: Data(original.utf8))) as? NSDictionary
         check(restored != nil && restored == originalObj && !AgentHooks.claudeInstalled(at: hookFile), "Agent 钩子：卸载后和原来一样")
+        let mixedHooks = #"{"hooks":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"/Apps/SI --agent-event claude"},{"type":"command","command":"echo keep-me"}]}]}}"#
+        try? Data(mixedHooks.utf8).write(to: hookFile)
+        AgentHooks.setClaude(installed: true, at: hookFile, executable: "/Apps/SI")
+        AgentHooks.setClaude(installed: false, at: hookFile)
+        let kept = (try? String(contentsOf: hookFile, encoding: .utf8)) ?? ""
+        check(kept.contains("keep-me") && kept.contains("matcher") && !kept.contains("--agent-event"), "Agent 钩子：同组的其他命令和匹配条件不删除")
 
         // 用临时会话重现中间消息、错轮次和内部辅助会话导致的完成误报。
         MainActor.assumeIsolated {
-            let monitor = AgentMonitor()
+            let monitor = AgentReader()
             var alerts = 0
             monitor.onAlert = { _ in alerts += 1 }
             let root = dir.appendingPathComponent("root.jsonl")
@@ -234,7 +240,7 @@ enum SelfTestMonitor {
             monitor.readCodex(root, alert: true)
             check(alerts == 3 && monitor.list.first?.state == .working, "Codex：同步提问和返回结果配对，不重复提醒")
 
-            let tools = AgentMonitor()
+            let tools = AgentReader()
             var needsInput = 0
             tools.onAlert = { if $0.state == .attention { needsInput += 1 } }
             tools.apply(["tool": "claude", "session": "c", "event": "PreToolUse", "toolName": "AskUserQuestion"], alert: true)
@@ -255,7 +261,107 @@ enum SelfTestMonitor {
             check(needsInput == 4 && tools.sessions["opencode|o"]?.state == .working, "OpenCode：问题及权限答复均解除等待")
             tools.apply(["tool": "opencode", "session": "o", "event": "session.status", "status": "idle"], alert: false)
             check(tools.sessions["opencode|o"]?.state == .done, "OpenCode：idle 状态不会误判为工作中")
+
+            tools.apply(["tool": "claude", "session": "late", "event": "Stop", "at": t0 + 5], alert: false)
+            tools.apply(["tool": "claude", "session": "late", "event": "PostToolUse", "at": t0 + 4,
+                         "plan": ["set": [["新清单", "completed"]]]], alert: false)
+            tools.apply(["tool": "claude", "session": "late", "event": "PostToolUse", "at": t0 + 2,
+                         "plan": ["set": [["旧清单", "pending"]]]], alert: false)
+            check(tools.sessions["claude|late"]?.state == .done && tools.sessions["claude|late"]?.plan.done == 1,
+                  "Agent 清单：晚到的清单不改变完成状态，旧清单不覆盖新清单")
+
+            let events = dir.appendingPathComponent("events.jsonl")
+            let codexDir = dir.appendingPathComponent("sessions/2000/01/01")
+            try? FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+            let reader = AgentReader(eventsURL: events, codexRoot: dir.appendingPathComponent("sessions"))
+            var replayAlerts = 0
+            reader.onAlert = { _ in replayAlerts += 1 }
+            let base = Date().timeIntervalSince1970 - 10
+            func hook(_ event: String, _ at: Double, _ plan: [String: Any]? = nil) {
+                var o: [String: Any] = ["tool": "claude", "session": "reconnect", "event": event, "at": at]
+                if let plan { o["plan"] = plan }
+                var data = try! JSONSerialization.data(withJSONObject: o)
+                data.append(0x0A)
+                if !FileManager.default.fileExists(atPath: events.path) { FileManager.default.createFile(atPath: events.path, contents: nil) }
+                let h = try! FileHandle(forWritingTo: events)
+                _ = try? h.seekToEnd(); try? h.write(contentsOf: data); try? h.close()
+            }
+            hook("UserPromptSubmit", base)
+            hook("PostToolUse", base + 1, ["add": "A"])
+            hook("PostToolUse", base + 2, ["add": "B"])
+            reader.loadInitial()
+            reader.loadInitial()
+            check(reader.sessions["claude|reconnect"]?.plan.total == 2, "Agent 重连：增量清单不重复回放")
+            hook("Stop", base + 3)
+            reader.loadInitial()
+            check(reader.sessions["claude|reconnect"]?.state == .done && replayAlerts == 0, "Agent 重连：断开期间的完成不补发提醒")
+            let old = codexDir.appendingPathComponent("old.jsonl")
+            append(old, "session_meta", ["source": "cli", "cwd": "/demo"])
+            append(old, "event_msg", ["type": "task_started", "turn_id": "old-turn"])
+            let discovery = AgentReader(eventsURL: events, codexRoot: dir.appendingPathComponent("sessions"))
+            discovery.loadInitial()
+            check(discovery.sessions["codex|old"]?.state == .working, "Codex：旧日期目录中的活跃会话仍能发现")
+            let longFile = dir.appendingPathComponent("long.jsonl")
+            let longReader = AgentReader(eventsURL: dir.appendingPathComponent("none"), codexRoot: dir.appendingPathComponent("empty"))
+            var longAlerts = 0
+            longReader.onAlert = { _ in longAlerts += 1 }
+            append(longFile, "session_meta", ["source": "cli", "cwd": "/demo"], at: Date().addingTimeInterval(-1900))
+            append(longFile, "event_msg", ["type": "task_started", "turn_id": "long"], at: Date().addingTimeInterval(-1900))
+            longReader.readCodex(longFile, alert: false)
+            longReader.poll()
+            let retained = longReader.list.first?.state == .working
+            append(longFile, "event_msg", ["type": "task_complete", "turn_id": "long"])
+            longReader.readCodex(longFile, alert: true)
+            check(retained && longAlerts == 1, "Codex：超过 30 分钟的轮次仍保留并提醒完成")
+            longReader.apply(["tool": "claude", "session": "active", "event": "UserPromptSubmit", "at": Date().timeIntervalSince1970 - 1900], alert: false)
+            longReader.apply(["tool": "claude", "session": "active", "event": "PostToolUse"], alert: false)
+            longReader.poll()
+            check(longReader.sessions["claude|active"]?.state == .working, "Agent：按最近活动而不是状态起始时间清理")
+
+            let jobs: [[String: Any]] = (0..<8).map { ["id": String($0), "name": String(repeating: "任", count: 80), "star": $0 == 0,
+                                                      "detail": String(repeating: "节", count: 120), "dir": String(repeating: "路", count: 120), "msg": String(repeating: "进", count: 120)] }
+            let large: [String: Any] = ["t": "snap", "hosts": (0..<3).map { ["name": "demo-\($0)", "njobs": 8, "jobs": jobs] }]
+            let fit = DisplayLink.fitSnapshot(large, limit: 1500)
+            let fitHosts = fit["hosts"] as? [[String: Any]] ?? []
+            let fitJobs = fitHosts.flatMap { $0["jobs"] as? [[String: Any]] ?? [] }
+            let encoded = try! JSONSerialization.data(withJSONObject: fit, options: [.withoutEscapingSlashes])
+            check(encoded.count + 1 <= 1500 && fitJobs.filter { $0["star"] as? Bool == true }.count == 3 && fitHosts.count == 3,
+                  "副屏：UTF-8 总字节受限，优先保留关注任务和服务器")
         }
+        let times = (8...20).map { String(format: "2026-11-01T%02d:00", $0) }
+        var codes = Array(repeating: 1, count: times.count), probs = Array(repeating: 10, count: times.count)
+        codes[1] = 61; probs[6] = 70; probs[8] = 80  // 9 点下过雨（已过去），14、16 点可能有雨
+        let rain = DisplayExtras.rainAhead(times: times, codes: codes, probs: probs, now: "2026-11-01T11:20")
+        check(rain?.from == 14 && rain?.prob == 80 && DisplayExtras.rainAhead(times: times, codes: codes, probs: probs, now: "2026-11-01T17:05") == nil,
+              "副屏：今天接下来的下雨时间")
+
+        // Agent 任务清单：整张清单、桌面 App 的增量操作、TaskCreate / TaskUpdate、Codex 的 plan。
+        var plan = AgentPlan()
+        plan.apply(AgentPlan.op(toolName: "mcp__ccd_turn__update_plan", input: ["items": [["content": "读代码", "status": "in_progress"],
+                                                                                         ["content": "改界面", "status": "pending"],
+                                                                                         ["content": "截图", "status": "pending"]]])!)
+        plan.apply(AgentPlan.op(toolName: "mcp__ccd_turn__update_plan", input: ["advance": true])!)
+        check(plan.done == 1 && plan.total == 3 && plan.now == "改界面", "Agent 清单：桌面 App 的 advance")
+        plan.apply(AgentPlan.op(toolName: "mcp__ccd_turn__update_plan", input: ["done": [2], "start": 3])!)
+        check(plan.done == 2 && plan.now == "截图", "Agent 清单：done / start")
+        var tasks = AgentPlan()
+        for t in ["A", "B"] { tasks.apply(AgentPlan.op(toolName: "TaskCreate", input: ["subject": t])!) }
+        tasks.apply(AgentPlan.op(toolName: "TaskUpdate", input: ["taskId": "1", "status": "completed"])!)
+        tasks.apply(AgentPlan.op(toolName: "TaskUpdate", input: ["taskId": "2", "status": "deleted"])!)
+        check(tasks.done == 1 && tasks.total == 1, "Agent 清单：TaskCreate / TaskUpdate")
+        var todo = AgentPlan()
+        todo.apply(AgentPlan.op(toolName: "TodoWrite", input: ["todos": [["content": "x", "status": "completed"], ["content": "y", "status": "in_progress"]]])!)
+        var codexPlan = AgentPlan()
+        codexPlan.apply(AgentPlan.op(toolName: "update_plan", input: ["plan": [["step": "s1", "status": "completed"], ["step": "s2", "status": "pending"]]])!)
+        check(todo.now == "y" && codexPlan.done == 1 && codexPlan.now == "s2" && AgentPlan.op(toolName: "Bash", input: [:]) == nil,
+              "Agent 清单：TodoWrite、Codex plan，其他工具不算")
+
+        // Claude 的 5 小时窗口（用 CC Switch 的调用记录估算）。
+        let h = 3600.0, base = Date(timeIntervalSince1970: 1_793_491_200)  // 整点
+        let w = AIUsage.window([(base.addingTimeInterval(0.2 * h), 10), (base.addingTimeInterval(1 * h), 5),
+                                (base.addingTimeInterval(6 * h), 7), (base.addingTimeInterval(7 * h), 3)], now: base.addingTimeInterval(8 * h))
+        check(w?.tokens == 10 && w?.reset == base.addingTimeInterval(11 * h)
+              && AIUsage.window([(base, 1)], now: base.addingTimeInterval(5 * h)) == nil, "AI 用量：Claude 的 5 小时窗口")
     }
 
     /// 一段样例输出：每段 (名字, 退出码, 行)；退出码为 nil 时这段整个缺失（输出被截断等）。

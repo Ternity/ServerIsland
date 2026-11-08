@@ -5,6 +5,13 @@ import Foundation
 enum RemoteScript {
     static let marker = "@@SI:"
 
+    /// 计费要查的资源：`known` 是已经知道资源的作业（默认 squeue 时脚本自己从这一轮的列表里找新作业，跳过它们）；
+    /// `query` 是自定义了 squeue 时要查的作业（上一轮看到的运行中作业）。
+    struct AllocRequest: Equatable {
+        var query: [String] = []
+        var known: [String] = []
+    }
+
     /// 默认的 squeue 命令后面再接上状态和工作目录（用 `|@@SI:WD|` 隔开），一次查询同时给任务列表、工作目录和计算软件识别用。
     static let squeueWithWorkdir = #"squeue -u "$(id -un)" -h -o '%i|%j|%T|%M|%l|%D|%R|%P|%F|%K|@@SI:WD|%T|%Z'"#
 
@@ -14,7 +21,12 @@ enum RemoteScript {
     /// - `SI_GA`：nvidia-smi 的计算进程，计算软件识别直接用。
     /// `appSignatures`：上次识别结果的文件签名（目录 → 签名），文件没变的目录不再重读（见 `AppDetectors.script`）。
     /// `includeDisk`：磁盘占用变化慢，由引擎决定隔几分钟查一次。
-    static func build(for host: HostConfig, appSignatures: [String: String] = [:], includeDisk: Bool = true) -> String {
+    /// `alloc`：打开计费时不为 nil。Slurm 是还不知道分到多少资源的运行中作业（每个作业只查一次 `scontrol show job`，
+    /// 新版本的字段叫 AllocTRES，老版本叫 TRES）。输出 `作业号|分到的资源|每节点申请的资源|整个作业申请的资源|节点数`：
+    /// 有的 Slurm 没把 gres/gpu 写进 AccountingStorageTRES，分到的资源里就没有卡，这时按申请的卡数算（见 `JobAlloc.parse`）；
+    /// PBS 直接从这一轮的 `qstat -f` 全文里取，不再查询。
+    static func build(for host: HostConfig, appSignatures: [String: String] = [:], includeDisk: Bool = true,
+                      alloc: AllocRequest? = nil) -> String {
         let c = host.commands
         var lines: [String] = ["printf '\(marker)BEGIN\\n'"]
         if !c.preamble.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -62,6 +74,23 @@ enum RemoteScript {
                 """)
             case .direct:
                 break
+            }
+            if let alloc {
+                let body = #"SI_S=$(scontrol show job -o "$j" 2>/dev/null | head -n 1 | tr ' ' '\n'); "#
+                    + #"si_v() { printf '%s\n' "$SI_S" | sed -n "s/^$1=//p" | head -n 1; }; "#
+                    + #"printf '%s|%s|%s|%s|%s\n' "$j" "$(si_v AllocTRES)$(si_v TRES)" "$(si_v TresPerNode)" "$(si_v TresPerJob)" "$(si_v NumNodes)"; done; true"#
+                if host.kind == .slurm && c.squeue == CommandSet.defaults.squeue {
+                    // 默认 squeue：这一轮的运行中作业就在 SI_JW 里，跳过已经知道资源的，同一轮就能查到新作业（一轮最多 20 个）。
+                    let known = alloc.known.compactMap(safeSlurmID).prefix(300).joined(separator: " ")
+                    section("alloc", "SI_K=' \(known) '; SI_N=0; for j in $(printf '%s\\n' \"$SI_JW\" | awk -F'|' '$2 == \"RUNNING\" { print $1 }'); do "
+                            + #"case "$SI_K" in *" $j "*) continue;; esac; SI_N=$((SI_N + 1)); [ "$SI_N" -le 20 ] || break; "# + body)
+                } else if host.kind == .slurm {
+                    // 自定义了 squeue：查上一轮看到、还不知道资源的运行中作业。
+                    let ids = alloc.query.compactMap(safeSlurmID).prefix(20).map(SSHRunner.shellQuote)
+                    if !ids.isEmpty { section("alloc", "for j in \(ids.joined(separator: " ")); do " + body) }
+                } else if host.kind == .pbs {
+                    section("alloc", #"printf '%s\n' "$SI_PQ" | si_pbs t"#)
+                }
             }
             if listsProcesses || (host.kind.isScheduler && host.detectApps) {
                 lines.append(AppDetectors.jobIDFunction + processScan(host: host))
@@ -225,6 +254,11 @@ enum RemoteScript {
         wrap(host, [("history", #"sacct -n -X -P -S now-24hours -u "$(id -un)" -o JobID,JobName,State,Elapsed,End,ExitCode,WorkDir 2>/dev/null || sacct -n -X -P -S now-24hours -u "$(id -un)" -o JobID,JobName,State,Elapsed,End,ExitCode"#)])
     }
 
+    /// PBS 的队列列表（设置页填单价用）。
+    static func pbsQueuesScript(host: HostConfig) -> String {
+        wrap(host, [("queues", "qstat -Q")])
+    }
+
     /// 高负载进程（给用户挑选要监听的 PID）。
     static func topProcessesScript(host: HostConfig) -> String {
         wrap(host, [
@@ -280,14 +314,16 @@ enum RemoteScript {
 
     /// PBS（PBS Pro / OpenPBS / Torque）：把 `qstat -f` 的全文转换成和 squeue / sacct 一样的行，后面的解析、数组合并、提醒全部沿用 Slurm 的。
     /// `si_pbs q`：`作业号|名称|状态|已运行|上限|节点数|原因或节点|队列|数组主编号|元素序号`（已结束的不输出）；
-    /// `si_pbs a`：`作业号|名称|状态|已运行|退出码`（作业结束后查最终状态）；`si_pbs w` / `si_pbs d`：运行中 / 全部作业的 `作业号|工作目录`。
+    /// `si_pbs a`：`作业号|名称|状态|已运行|退出码|资源`（作业结束后查最终状态）；`si_pbs t`：运行中作业的 `作业号|资源`（计费用）。
+    /// 资源写成 Slurm TRES 的样子（`cpu=32,node=1,gres/gpu=4`）：PBS Pro 用 Resource_List.ncpus / ngpus，Torque 从 nodes=2:ppn=16:gpus=2 里算。
+    ///`si_pbs w` / `si_pbs d`：运行中 / 全部作业的 `作业号|工作目录`。
     /// 作业号统一写成 Slurm 的形式：1234.server → 1234，数组子作业 1234[5].server → 1234_5；数组本身（1234[]）跳过，子作业由 -t 列出。
     /// 状态：R/B 运行，E 收尾，H/Q/W/T 排队，S/U 挂起，F/X/C 结束（按 Exit_status：0 完成，-29/-11 超时，≥256 被信号终止，其它失败）。
     /// 续行（以 Tab 开头）接到上一个值后面。`si_pbsval 键` 取单个值。
     static let pbsFunction = #"""
     si_pbs() { awk -v mode="$1" '
     function clear() { id = ""; k = ""; delete v }
-    function out(   jid, arr, task, st, ex, S, name, n, r, h, nh, parts, i, x, seen, wd) {
+    function out(   jid, arr, task, st, ex, S, name, n, r, h, nh, parts, i, x, seen, wd, c, g, tc, tg, m, p, q, tr) {
       if (id == "") return
       jid = id; sub(/\..*$/, "", jid)
       if (jid ~ /\[\]$/) { clear(); return }
@@ -316,10 +352,24 @@ enum RemoteScript {
         h = v["exec_host"]; r = ""; nh = split(h, parts, "+")
         for (i = 1; i <= nh; i++) { x = parts[i]; sub(/\/.*$/, "", x); if (x != "" && !(x in seen)) { seen[x] = 1; r = r (r == "" ? "" : ",") x } }
       }
+      c = v["Resource_List.ncpus"]; g = v["Resource_List.ngpus"]
+      if (c == "" || g == "") {
+        nh = split(v["Resource_List.nodes"], parts, "+"); tc = 0; tg = 0
+        for (i = 1; i <= nh; i++) {
+          x = parts[i]; m = (x ~ /^[0-9]+(:|$)/) ? x + 0 : 1; p = 1; q = 0
+          if (match(x, /ppn=[0-9]+/)) p = substr(x, RSTART + 4, RLENGTH - 4) + 0
+          if (match(x, /gpus=[0-9]+/)) q = substr(x, RSTART + 5, RLENGTH - 5) + 0
+          tc += m * p; tg += m * q
+        }
+        if (c == "" && nh > 0) c = tc
+        if (g == "" && nh > 0) g = tg
+      }
+      tr = (c == "" ? "" : "cpu=" c ",") "node=" n (g == "" ? "" : ",gres/gpu=" g)
       wd = v["Variable_List"]
       if (match(wd, /PBS_O_WORKDIR=[^,]*/)) wd = substr(wd, RSTART + 14, RLENGTH - 14); else wd = ""
       if (mode == "q") { if (st != "F" && st != "X" && st != "C") print jid "|" name "|" S "|" v["resources_used.walltime"] "|" v["Resource_List.walltime"] "|" n "|" r "|" v["queue"] "|" arr "|" task }
-      else if (mode == "a") print jid "|" name "|" S "|" v["resources_used.walltime"] "|" (ex == "" ? "" : ex ":0")
+      else if (mode == "a") print jid "|" name "|" S "|" v["resources_used.walltime"] "|" (ex == "" ? "" : ex ":0") "|" tr
+      else if (mode == "t") { if (S == "RUNNING" || S == "COMPLETING") print jid "|" tr }
       else if (mode == "w") { if (S == "RUNNING" && wd != "") print jid "|" wd }
       else if (mode == "d") { if (wd != "") print jid "|" wd }
       clear()

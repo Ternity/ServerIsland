@@ -32,7 +32,7 @@ cross/
 ```bash
 cd cross/src/ServerIsland.Desktop
 dotnet build                                   # 编译
-dotnet run -- --selftest                       # 自检：和 Swift 版对应的检查 + 跨平台版特有的检查（163 项）
+dotnet run -- --selftest                       # 自检：和 Swift 版对应的检查 + 跨平台版特有的检查（Mac 上 223 项）
 dotnet run -- --render-preview <目录> [zh|en]   # 离屏渲染刘海各状态、各页面、设置窗口、图标表
 dotnet run -- --ui-smoke <目录>                 # 在真实窗口上走一遍界面并截图（Windows 真机上也能用）
 dotnet run -- --demo                           # 演示模式（不连接服务器；详情 / 历史 / 分区也有假数据）
@@ -46,7 +46,7 @@ cross/scripts/publish.sh                       # → build/ServerIsland-<版本>
 ## 和 Swift 版保持一致的约定
 
 - **换行一律 LF**（`.gitattributes` 里 `* text=auto eol=lf`）：C# 原始字符串会原样保留源文件的换行，Windows 默认 `core.autocrlf=true` 时内嵌的 bash 脚本会带 `\r`。2026-10-18 第一次在 Windows CI 上跑自检时就因此失败了 39 项（在 Mac 上把源码转成 CRLF 可以复现）。两种 SSH 传输和自检里的 bash 调用都会再把 `\r\n` 换成 `\n`，作为第二道保险。
-- **远端脚本逐字一致**：所有脚本用 C# 原始字符串字面量（`"""…"""`）书写，`\0`、`\n` 保持字面。验证方法：`.build/debug/ServerIsland --dump-scripts <目录>`（列表在 `Sources/ServerIsland/App/ReferenceScripts.swift`，和 C# 的 `SelfTest.ReferenceScripts()` 一一对应），再运行 `SERVERISLAND_SCRIPT_REF=<目录> dotnet run -- --selftest`，26 个脚本应全部"和 Swift 版脚本一致"。新增脚本时两边的列表一起加。**改 Swift 版的远端脚本时，两边要一起改。**
+- **远端脚本逐字一致**：所有脚本用 C# 原始字符串字面量（`"""…"""`）书写，`\0`、`\n` 保持字面。验证方法：`.build/debug/ServerIsland --dump-scripts <目录>`（列表在 `Sources/ServerIsland/App/ReferenceScripts.swift`，和 C# 的 `SelfTest.ReferenceScripts()` 一一对应），再运行 `SERVERISLAND_SCRIPT_REF=<目录> dotnet run -- --selftest`，32 个脚本应全部"和 Swift 版脚本一致"。新增脚本时两边的列表一起加。**改 Swift 版的远端脚本时，两边要一起改。**
 - 尺寸常量（`IslandLayout`）、配色（`Hue`）、Tako 网格（`PetSprite`）、文案（`L(zh, en)`）都照搬 Swift 版；用来匹配服务器输出的字符串不翻译。
 - 引擎在界面线程上运行，`await` 之后回到界面线程（对应 Swift 的 `@MainActor`）。
 
@@ -74,6 +74,8 @@ cross/scripts/publish.sh                       # → build/ServerIsland-<版本>
 - **通知**：Linux 用 `notify-send`；Windows 未打包的程序发不了原生通知，提醒靠刘海弹窗 + 提示音（设置里不显示"系统通知"开关）。
 - **开机启动**：Windows 注册表 `HKCU\…\Run`；Linux `~/.config/autostart/serverisland.desktop`。
 - **睡眠唤醒**：没有跨平台通知，引擎每 10 秒看一次时钟，跳变超过 30 秒就当作刚唤醒，4 秒后重新轮询。
+- **外接副屏（2026-10-31，v0.5.0）**：和 Mac 版同一套协议和设置项（`usbDisplay`、`displayLockSync`、`deadlines`、`weatherCity`…，配置文件两边互通）。`DisplayLink.cs` 在界面线程上跑（计时器用 `await Task.Delay`，串口读线程把行 Post 回来）；只有 **USB**（`System.IO.Ports`，打开前 `DtrEnable=true`、`RtsEnable=false`，否则会复位板子）。找串口：Windows 读注册表 `USB\VID_303A…\Device Parameters\PortName`，Linux 在 `/sys/class/tty/*/device` 往上找 `idVendor`，macOS 试用版用 `/dev/cu.usbmodem*` 靠握手过滤。锁屏检测（`Platform/Services.cs` 的 `LockState`）：Windows 看 `LogonUI.exe`，Linux 用 `loginctl show-session $XDG_SESSION_ID -p LockedHint`，每 3 秒一次。系统日历只有 Mac 版能读，这里只发截止日期。Agent 钩子调用 `Environment.ProcessPath`（Windows 上命令用双引号），程序挪了位置要在设置里点"更新"；`--agent-event` 在 `Program.Main` 最前面处理，不打印任何东西。AI 用量用 `Microsoft.Data.Sqlite` 只读打开 `~/.cc-switch/cc-switch.db`。**蓝牙只有 Windows**：`Platform/WinBle.cs`（WinRT：广播过滤服务 UUID → 没配对就自定义配对 `ProvidePin`，弹 `PromptDialog` 让用户输入副屏上的 6 位码 → 订阅 TX 通知 → 写 RX 时按 `GattSession.MaxPduSize − 3` 切块、带回应写入、同类快照只留最新），通过 `DisplayLink.BleFactory` 接入（`IDisplayBle`），USB 优先。为此 Desktop 项目在 `-r win-*` 或在 Windows 上编译时目标框架换成 `net10.0-windows10.0.19041.0`（`EnableWindowsTargeting`，在 Mac 上用 `dotnet build -r win-x64` 检查能否编译）。Linux 蓝牙（BlueZ）还没做。Windows / Linux 真机上的串口、蓝牙配对、锁屏检测、钩子都未验证（Mac 上已用真板子测过 USB 握手和推送）。
+- **手机推送（2026-11-08，v0.5.0）**：企业微信群机器人，和 Mac 版同一套设置项（`phonePush`，配置文件互通）和消息文本（`--push-preview` 两边逐字一致，改了格式要对比一次）。`Core/PhonePush.cs` 在界面线程上跑（`HttpClient`，`await Task.Delay` 做 10 秒合并和限速），key 存 `CredentialStore.SaveSecret("wecom-webhook")`：Windows 凭据管理器、Linux 的 secret-tool（没有 secret-tool 时保存失败，设置页会提示）。Agent 提醒：`DisplayLink.AgentsWanted`（副屏连着或推送要 Agent）为真时读会话。Windows / Linux 真机上保存 key 和发送都未验证。
 - **打包**：未签名，Windows 首次运行 SmartScreen 会提示"Windows 已保护你的电脑"，点"更多信息 → 仍要运行"。
 
 ## 开发流程

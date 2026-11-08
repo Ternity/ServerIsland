@@ -26,6 +26,9 @@ enum AgentEvents {
         if let status = obj["status"] as? String { line["status"] = status }
         else if let status = obj["status"] as? [String: Any] { line["status"] = status["type"] }
         let input = obj["tool_input"] as? [String: Any] ?? obj
+        // 任务清单（TodoWrite、update_plan 等）：只记下操作，不记别的参数。
+        if line["event"] as? String == "PostToolUse", let tn = obj["tool_name"] as? String,
+           let op = AgentPlan.op(toolName: tn, input: input) { line["plan"] = op }
         if let q = (input["questions"] as? [[String: Any]])?.first,
            let question = (q["question"] ?? q["header"]) as? String { line["message"] = String(question.prefix(120)) }
         // 只留提问的开头当会话标题（本机文件，不外传）。
@@ -56,18 +59,92 @@ struct AgentSession: Equatable {
     var state: State
     var message: String
     var changedAt: Date
+    var plan = AgentPlan()
+    var planAt = Date.distantPast
 }
 
 @MainActor
 final class AgentMonitor {
-    private(set) var sessions: [String: AgentSession] = [:]
-    /// 状态变化（需要你确认 / 回答完了）时回调，用来发提醒。
+    private let reader = AgentReader()
+    private let queue = DispatchQueue(label: "ServerIsland.agents", qos: .utility)
+    private var timer: Timer?
+    private var observer: NSObjectProtocol?
+    private var generation = 0
+    private var reading = false
+    private var active = false
+    private var initial = true
+    private(set) var list: [AgentSession] = []
     var onAlert: ((AgentSession) -> Void)?
     var onChange: (() -> Void)?
 
+    func start() {
+        guard !active else { return }
+        active = true
+        initial = true
+        generation += 1
+        poll()
+        observer = DistributedNotificationCenter.default().addObserver(forName: .init("ServerIsland.agentEvent"), object: nil,
+                                                                       queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.poll() }
+        }
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.poll() }
+        }
+    }
+
+    func stop() {
+        active = false
+        list = []
+        generation += 1
+        timer?.invalidate()
+        timer = nil
+        if let observer { DistributedNotificationCenter.default().removeObserver(observer) }
+        observer = nil
+    }
+
+    private func poll() {
+        guard active, !reading else { return }
+        reading = true
+        let token = generation, silent = initial, reader = reader
+        queue.async {
+            var alerts: [AgentSession] = []
+            reader.onAlert = { alerts.append($0) }
+            if silent { reader.loadInitial() } else { reader.poll() }
+            reader.onAlert = nil
+            let result = reader.list
+            let notifications = alerts
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.reading = false
+                guard self.active else { return }
+                guard token == self.generation else { self.poll(); return }
+                self.initial = false
+                let changed = self.list != result
+                self.list = result
+                if silent || changed { self.onChange?() }
+                for alert in notifications { self.onAlert?(alert) }
+            }
+        }
+    }
+}
+
+/// 文件读取和状态解析仅由串行后台队列使用；自检可直接传入临时文件。
+final class AgentReader {
+    let eventsURL: URL
+    let codexRoot: URL
+    init(eventsURL: URL = AgentEvents.fileURL, codexRoot: URL = URL(fileURLWithPath: NSHomeDirectory() + "/.codex/sessions")) {
+        self.eventsURL = eventsURL
+        self.codexRoot = codexRoot
+    }
+    private(set) var sessions: [String: AgentSession] = [:]
+    /// 状态变化（需要你确认 / 回答完了）时回调，用来发提醒。
+    var onAlert: ((AgentSession) -> Void)?
+
     private var offset: UInt64 = 0
-    private var timer: Timer?
-    private var observer: NSObjectProtocol?
+    private var loaded = false
+    private var activity: [String: Date] = [:]
+    private var codexFiles: Set<URL> = []
+    private var lastDiscovery = Date.distantPast
     private var codexOffsets: [String: UInt64] = [:]
     private var codexUserSessions: [String: Bool] = [:]
     private var codexDirectories: [String: String] = [:]
@@ -83,18 +160,6 @@ final class AgentMonitor {
     static let doneTTL: TimeInterval = 2 * 3600
     static let staleWorking: TimeInterval = 30 * 60
 
-    func start() {
-        // 启动时只看最近的事件，不把以前的提醒再发一遍。
-        loadInitial()
-        observer = DistributedNotificationCenter.default().addObserver(forName: .init("ServerIsland.agentEvent"), object: nil,
-                                                                       queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.poll() }
-        }
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.poll() }
-        }
-    }
-
     /// 发给副屏的列表：需要你的排最前，然后是在跑的，再后是刚完成的。
     var list: [AgentSession] {
         let order: [AgentSession.State: Int] = [.attention: 0, .working: 1, .error: 2, .done: 3]
@@ -103,29 +168,27 @@ final class AgentMonitor {
         }
     }
 
-    private func loadInitial() {
-        let url = AgentEvents.fileURL
+    func loadInitial() {
+        let url = eventsURL
         // 文件太大就截掉前面一半（只是缓冲，不需要保留历史）。
         if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = (attrs[.size] as? NSNumber)?.uint64Value, size > 2_000_000, let data = try? Data(contentsOf: url) {
+           let size = (attrs[.size] as? NSNumber)?.uint64Value, !loaded, size > 2_000_000, let data = try? Data(contentsOf: url) {
             try? data.suffix(200_000).write(to: url)
         }
-        offset = 0
+        loaded = true
         readEvents(alert: false)
         scanCodex(alert: false)
         prune()
     }
 
-    private func poll() {
-        let before = sessions
+    func poll() {
         readEvents(alert: true)
         scanCodex(alert: true)
         prune()
-        if sessions != before { onChange?() }
     }
 
     private func readEvents(alert: Bool) {
-        guard let h = try? FileHandle(forReadingFrom: AgentEvents.fileURL) else { return }
+        guard let h = try? FileHandle(forReadingFrom: eventsURL) else { return }
         defer { try? h.close() }
         let end = (try? h.seekToEnd()) ?? 0
         if end < offset { offset = 0 }
@@ -150,7 +213,14 @@ final class AgentMonitor {
         var s = sessions[key] ?? AgentSession(tool: tool, id: sid, cwd: "", title: "", state: .done, message: "", changedAt: at)
         // 钩子是异步跑的，写进文件的顺序可能和发生顺序不同：比上一次状态变化还早的事件（比如晚到的
         // permission_prompt 通知，而工具其实已经批准并跑完了）不能再把状态改回去。
-        if sessions[key] != nil, at < s.changedAt, event != "SessionEnd", event != "session.deleted" { return }
+        if let op = o["plan"] as? [String: Any], at >= s.planAt {
+            s.plan.apply(op)
+            s.planAt = at
+        }
+        if sessions[key] != nil, at < s.changedAt, event != "SessionEnd", event != "session.deleted" {
+            sessions[key] = s
+            return
+        }
         if let c = o["cwd"] as? String, !c.isEmpty { s.cwd = c }
         if let p = o["prompt"] as? String, !p.isEmpty { s.title = p }
         let old = s.state
@@ -200,6 +270,7 @@ final class AgentMonitor {
         }
         if s.state != old || sessions[key] == nil { s.changedAt = at }
         sessions[key] = s
+        activity[key] = max(activity[key] ?? .distantPast, at)
         // 提醒：变成"需要你确认"，或者从"工作中"变成"完成 / 出错"。
         if alert, s.state != old, s.state == .attention || (old == .working && (s.state == .done || s.state == .error)) {
             onAlert?(s)
@@ -214,12 +285,32 @@ final class AgentMonitor {
     }
 
     /// Codex：读最近 6 小时有改动的用户会话，按 turn_id 匹配开始和结束。
+    /// 每 10 分钟发现一次旧目录中的活跃会话；平时检查已知文件和最近三天的目录。
     private func scanCodex(alert: Bool) {
-        let root = URL(fileURLWithPath: NSHomeDirectory() + "/.codex/sessions")
-        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
         let cutoff = Date().addingTimeInterval(-6 * 3600)
-        for case let url as URL in walker where url.pathExtension == "jsonl" {
-            guard let m = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, m > cutoff else { continue }
+        if Date().timeIntervalSince(lastDiscovery) >= 600 {
+            lastDiscovery = Date()
+            if let walker = FileManager.default.enumerator(at: codexRoot, includingPropertiesForKeys: [.contentModificationDateKey]) {
+                for case let url as URL in walker where url.pathExtension == "jsonl" {
+                    if let m = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, m > cutoff {
+                        codexFiles.insert(url)
+                    }
+                }
+            }
+        }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.dateFormat = "yyyy/MM/dd"
+        for back in 0...2 {
+            let dir = codexRoot.appendingPathComponent(f.string(from: Date().addingTimeInterval(Double(-back) * 86400)))
+            guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { continue }
+            codexFiles.formUnion(files.filter { $0.pathExtension == "jsonl" })
+        }
+        codexFiles = codexFiles.filter {
+            ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) > cutoff
+        }
+        for url in codexFiles {
             readCodex(url, alert: alert)
         }
     }
@@ -256,7 +347,7 @@ final class AgentMonitor {
             let payload = o["payload"] as? [String: Any] ?? [:]
             let at = (o["timestamp"] as? String).flatMap { ISO8601DateFormatter.fractional.date(from: $0) } ?? Date()
             var s = sessions[key] ?? AgentSession(tool: "codex", id: key, cwd: codexDirectories[path] ?? "", title: "", state: .done, message: "", changedAt: at)
-            let old = s.state
+            let old = sessions[key]?.state ?? (codexTurns[key] != nil ? .working : s.state)
             var newQuestion = false
             switch (o["type"] as? String, payload["type"] as? String) {
             case ("session_meta", _):
@@ -278,6 +369,11 @@ final class AgentMonitor {
                 codexTurns[key] = nil
                 codexQuestions[key] = nil
                 s.state = .done
+            case ("response_item", "function_call") where (payload["name"] as? String ?? "").hasSuffix("update_plan"):
+                guard let arguments = payload["arguments"] as? String, let bytes = arguments.data(using: .utf8),
+                      let args = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
+                      let op = AgentPlan.op(toolName: "update_plan", input: args) else { continue }
+                s.plan.apply(op)
             case ("response_item", "function_call"):
                 let name = (payload["name"] as? String ?? "").split(separator: ".").last.map(String.init) ?? ""
                 guard name == "request_user_input" || name == "request_user_input_async",
@@ -320,6 +416,7 @@ final class AgentMonitor {
             }
             if s.state != old || sessions[key] == nil || newQuestion { s.changedAt = at }
             sessions[key] = s
+            activity[key] = max(activity[key] ?? .distantPast, at)
             if alert, newQuestion, abs(Date().timeIntervalSince(at)) < 30 { onAlert?(s) }
             // 中断不报“回答完了”，也不补报几小时前的历史完成事件。
             if alert, payload["type"] as? String == "task_complete", s.state == .done, old == .working,
@@ -329,9 +426,11 @@ final class AgentMonitor {
 
     private func prune() {
         let now = Date()
-        sessions = sessions.filter { _, s in
+        sessions = sessions.filter { key, s in
             switch s.state {
-            case .working: return now.timeIntervalSince(s.changedAt) < Self.staleWorking
+            case .working:
+                let age = now.timeIntervalSince(activity[key] ?? s.changedAt)
+                return age < Self.staleWorking || (codexTurns[key] != nil && age < 6 * 3600)
             case .attention: return now.timeIntervalSince(s.changedAt) < Self.doneTTL
             case .done, .error: return now.timeIntervalSince(s.changedAt) < Self.doneTTL
             }
@@ -395,7 +494,13 @@ enum AgentHooks {
         }
         var hooks = obj["hooks"] as? [String: Any] ?? [:]
         for ev in claudeEvents {
-            var groups = (hooks[ev] as? [Any] ?? []).filter { !isOurs($0) }
+            var groups = (hooks[ev] as? [Any] ?? []).compactMap { raw -> Any? in
+                guard var group = raw as? [String: Any], let entries = group["hooks"] as? [[String: Any]] else { return raw }
+                let kept = entries.filter { !($0["command"] as? String ?? "").contains("--agent-event claude") }
+                guard !kept.isEmpty else { return nil }
+                group["hooks"] = kept
+                return group
+            }
             if installed {
                 let cmd = "'\(exe)' --agent-event claude"
                 var group: [String: Any] = ["hooks": [["type": "command", "command": cmd, "async": true, "timeout": 10]]]

@@ -15,6 +15,17 @@ APP="$ROOT/build/ServerIsland.app"
 STAGE="$ROOT/build/dmg-stage"
 DMG="$ROOT/build/ServerIsland-$VERSION.dmg"
 
+# Sources/ServerIsland/Private/ 是本机的实验功能（不进仓库），发布包里不带：编译前挪开，脚本结束时放回。
+PRIVATE="$ROOT/Sources/ServerIsland/Private"
+HOLD="$ROOT/build/.private-hold"
+mkdir -p "$ROOT/build"
+if [[ -d "$PRIVATE" ]]; then
+  rm -rf "$HOLD"
+  mv "$PRIVATE" "$HOLD"
+  trap 'mv "$HOLD" "$PRIVATE"' EXIT
+  echo "▸ 本机实验功能不进发布包（已暂时挪开 Private/）"
+fi
+
 echo "▸ 编译 release（arm64）"
 swift build -c release --arch arm64 2>&1 | grep -E "error|warning: unre|Compiling|Build complete" || true
 ARM_BIN="$(swift build -c release --arch arm64 --show-bin-path)/ServerIsland"

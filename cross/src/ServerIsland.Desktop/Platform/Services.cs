@@ -340,3 +340,37 @@ public static class Notifier
 
     static string AppleQuote(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 }
+
+/// 电脑是否锁屏（副屏跟着熄屏用）。在后台线程上调用，每 3 秒一次，要轻。
+/// Windows：锁屏时有 LogonUI.exe 在运行；Linux：logind 会话的 LockedHint（GNOME、KDE 等会设置）；macOS 试用版：不检测。
+public static class LockState
+{
+    public static bool IsLocked()
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                var procs = System.Diagnostics.Process.GetProcessesByName("LogonUI");
+                foreach (var p in procs) p.Dispose();
+                return procs.Length > 0;
+            }
+            if (OperatingSystem.IsLinux())
+            {
+                var session = Environment.GetEnvironmentVariable("XDG_SESSION_ID");
+                if (string.IsNullOrEmpty(session)) return false;
+                var psi = new System.Diagnostics.ProcessStartInfo("loginctl", ["show-session", session, "-p", "LockedHint", "--value"])
+                {
+                    RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
+                };
+                using var proc = System.Diagnostics.Process.Start(psi);
+                if (proc == null) return false;
+                var output = proc.StandardOutput.ReadToEnd().Trim();
+                proc.WaitForExit(2000);
+                return output == "yes";
+            }
+        }
+        catch { }
+        return false;
+    }
+}

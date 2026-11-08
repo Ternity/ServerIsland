@@ -156,6 +156,8 @@ enum Parsers {
             }
             if !col(5).isEmpty { detail.append(col(5)) }
             job.detail = detail.joined(separator: " · ")
+            if !col(5).isEmpty { job.partition = col(5) }
+            job.nodes = Int(col(3))
 
             // 数组：优先用 %F/%K，否则从 "123_5" / "123_[7-99%10]" 里拆。
             if tail == 8, col(7) != "N/A", !col(7).isEmpty, col(6) != id {
@@ -210,6 +212,7 @@ enum Parsers {
                 g.array = ArrayInfo(baseID: base)
                 g.limit = job.limit
                 g.workdir = job.workdir
+                g.partition = job.partition
                 out.append(g)
                 i = out.count - 1
                 groups[base] = i
@@ -239,6 +242,42 @@ enum Parsers {
             let id = f[0].trimmingCharacters(in: .whitespaces)
             let raw = f[2].trimmingCharacters(in: .whitespaces)
             out[id] = (JobState(slurm: raw), raw, f.count > 3 ? slurmDuration(f[3]) : nil, f.count > 4 ? f[4] : "")
+        }
+        return out
+    }
+
+    /// 计费用的资源：`alloc` 段（`作业号|分到的资源|每节点申请|整个作业申请|节点数`，PBS 只有前两列）
+    /// 和 sacct / `si_pbs a` 的最后一列（AllocTRES）。认不出的行跳过。
+    static func allocs(_ lines: [String]) -> [String: JobAlloc] {
+        var out: [String: JobAlloc] = [:]
+        for line in lines {
+            let f = line.components(separatedBy: "|")
+            guard f.count >= 2 else { continue }
+            let id = f[0].trimmingCharacters(in: .whitespaces)
+            func col(_ i: Int) -> String { i < f.count ? f[i] : "" }
+            guard !id.isEmpty, let a = JobAlloc.parse(f[1], perNode: col(2), perJob: col(3), nodes: Int(col(4).prefix { $0.isNumber })) else { continue }
+            out[id] = a
+        }
+        return out
+    }
+
+    /// `qstat -Q` 的队列名（跳过表头和分隔线）。
+    static func pbsQueues(_ lines: [String]) -> [String] {
+        var out: [String] = []
+        for line in lines {
+            guard let first = line.split(separator: " ", omittingEmptySubsequences: true).first.map(String.init) else { continue }
+            if first == "Queue" || first.hasPrefix("-") || first.hasPrefix("qstat") || out.contains(first) { continue }
+            out.append(first)
+        }
+        return out
+    }
+
+    static func sacctAllocs(_ lines: [String]) -> [String: JobAlloc] {
+        var out: [String: JobAlloc] = [:]
+        for line in lines {
+            let f = line.components(separatedBy: "|")
+            guard f.count >= 6, let last = f.last, last.contains("="), let a = JobAlloc.parse(last) else { continue }
+            out[f[0].trimmingCharacters(in: .whitespaces)] = a
         }
         return out
     }

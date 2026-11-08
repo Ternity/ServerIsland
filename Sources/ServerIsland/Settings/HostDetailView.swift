@@ -246,8 +246,8 @@ struct HostDetailView: View {
         Section {
             Toggle(isOn: $host.detectApps) {
                 HelpLabel(L("识别计算进度", "Detect Progress"),
-                          help: L("在任务的工作目录里找特征文件：\nloss.out + nep.in → NEP 训练\nloss.out + gnep.in → GNEP 训练\n带表头的 loss.out（可在 output/ 里）→ TorchNEP 训练\nlogs/*.log → MACE 训练\nrun.in + neighbor.out / thermo.out → GPUMD 模拟\n与任务列表同一次轮询完成，只读文件末尾。",
-                                  "Looks for marker files in each job's working directory:\nloss.out + nep.in → NEP training\nloss.out + gnep.in → GNEP training\nloss.out with a header (may be in output/) → TorchNEP training\nlogs/*.log → MACE training\nrun.in + neighbor.out / thermo.out → GPUMD MD\nDone in the same poll, reading only file tails."))
+                          help: L("在任务的工作目录里找特征文件：\nloss.out + nep.in → NEP 训练\nloss.out + gnep.in → GNEP 训练\n带表头的 loss.out（可在 output/ 里）→ TorchNEP 训练\nlogs/*.log → MACE 训练\nlcurve.out → DeePMD 训练\nrun.in + neighbor.out / thermo.out → GPUMD 模拟\n与任务列表同一次轮询完成，只读文件末尾。",
+                                  "Looks for marker files in each job's working directory:\nloss.out + nep.in → NEP training\nloss.out + gnep.in → GNEP training\nloss.out with a header (may be in output/) → TorchNEP training\nlogs/*.log → MACE training\nlcurve.out → DeePMD training\nrun.in + neighbor.out / thermo.out → GPUMD MD\nDone in the same poll, reading only file tails."))
             }
             if host.detectApps {
                 LabeledContent {

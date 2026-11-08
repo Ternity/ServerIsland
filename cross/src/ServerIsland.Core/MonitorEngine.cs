@@ -17,6 +17,14 @@ public sealed partial class MonitorEngine
     public bool Demo { get; }
     public ISshTransport Ssh { get; private set; }
     public HistoryStore History { get; }
+    /// 费用账本（打开计费后，作业结束时记一笔）。
+    public CostLedger Costs { get; }
+    /// 运行中作业分到的资源（主机 → 作业号 → 资源）。Slurm 每个作业只查一次；PBS 每轮从 qstat 全文里取。
+    internal readonly Dictionary<Guid, Dictionary<string, JobAlloc>> AllocCache = [];
+    /// 外接副屏（没插也照样存在，只是不发）。由界面层创建并启动。
+    public DisplayLink? DisplayLink { get; set; }
+    /// 手机推送（企业微信）。
+    public PhonePush PhonePush { get; }
 
     /// 状态变化（快照、提示、登录中）。界面据此重绘。
     public event Action? Changed;
@@ -107,6 +115,8 @@ public sealed partial class MonitorEngine
         Demo = demo;
         Ssh = ssh ?? SshCommon.Create(store.Settings.SshBackend);
         History = history ?? new HistoryStore(persist: !demo && store.Persist);
+        Costs = new CostLedger(persist: !demo && store.Persist);
+        PhonePush = new PhonePush(store, demo);
         _context = SynchronizationContext.Current;
         Store.Changed += Sync;
     }
@@ -332,7 +342,7 @@ public sealed partial class MonitorEngine
         var signatures = (_appCache.GetValueOrDefault(id) ?? []).Where(kv => kv.Value.Signature != null)
             .ToDictionary(kv => kv.Key, kv => kv.Value.Signature!);
         var withDisk = DateTime.Now - _diskCheckedAt.GetValueOrDefault(id, DateTime.MinValue) >= DiskInterval;
-        var result = await Run(host, RemoteScript.Build(host, signatures, withDisk));
+        var result = await Run(host, RemoteScript.Build(host, signatures, withDisk, AllocQuery(host)));
         if (ct.IsCancellationRequested)
         {
             if (Snapshots.TryGetValue(id, out var s0)) { s0.IsRefreshing = false; NotifyChanged(); }
@@ -396,6 +406,11 @@ public sealed partial class MonitorEngine
             if (previous.LastUpdate == null) await RecordEndedWhileAway(host, snap);
             History.SetActive(id, snap.Jobs);
         }
+        if (listed && AllocCache.TryGetValue(id, out var cache))
+        {
+            var ids = snap.Jobs.SelectMany(j => new[] { j.Id }.Concat(j.Array?.Running.Select(e => e.Id) ?? [])).ToHashSet();
+            foreach (var k in cache.Keys.Where(k => !ids.Contains(k)).ToList()) cache.Remove(k);
+        }
         await InitializeArrays(host);
     }
 
@@ -425,17 +440,23 @@ public sealed partial class MonitorEngine
         var gone = History.ActiveJobs(host.Id).Where(j => !current.Contains(j.Id)).ToList();
         if (gone.Count == 0) return;
         var finals = new Dictionary<string, SacctFinal>();
+        var allocs = new Dictionary<string, JobAlloc>();
         var slurmIds = gone.Where(j => j.Slurm && !j.Id.Contains('[')).Select(j => j.Id).ToList();
         if (slurmIds.Count > 0 && !SacctUnsupported.Contains(host.Id))
         {
             var r = await Run(host, RemoteScript.SacctScript(host, slurmIds), 20);
-            if (RemoteScript.Parse(r.Stdout).Get("sacct") is { } sec) finals = Parsers.Sacct(sec.Lines);
+            if (RemoteScript.Parse(r.Stdout).Get("sacct") is { } sec)
+            {
+                finals = Parsers.Sacct(sec.Lines);
+                allocs = Parsers.SacctAllocs(sec.Lines);
+            }
         }
-        RecordEndedWhileAway(host, gone, finals);
+        RecordEndedWhileAway(host, gone, finals, allocs);
     }
 
     /// 查询结果与历史写入分开，便于用本地样例验证重启后的补记，不连接服务器。
-    internal void RecordEndedWhileAway(HostConfig host, List<HistoryStore.ActiveJob> gone, Dictionary<string, SacctFinal> finals)
+    internal void RecordEndedWhileAway(HostConfig host, List<HistoryStore.ActiveJob> gone, Dictionary<string, SacctFinal> finals,
+                                       Dictionary<string, JobAlloc>? allocs = null)
     {
         foreach (var j in Enumerable.Reverse(gone))
         {
@@ -459,6 +480,9 @@ public sealed partial class MonitorEngine
                 Id = j.Id, Name = j.Name, State = state, Elapsed = f?.Elapsed ?? j.Elapsed, EndedAt = j.SeenAt,
                 ExitCode = f?.Exit, Note = note, Dir = j.Dir,
             });
+            // 数组只在运行时按元素记费用，这里不补
+            if (j.Slurm && j.ArrayTotal == null && elems.Count == 0)
+                RecordCost(host, j.Id, j.Name, j.Partition, JobAlloc.Best(allocs?.GetValueOrDefault(j.Id), j.Alloc), j.Nodes, f?.Elapsed ?? j.Elapsed, endedAt: j.SeenAt);
         }
         DebugLog.Log($"[{host.DisplayName}] 补记 ServerIsland 未运行时结束的任务：{string.Join(" ", gone.Select(j => j.Id))}");
     }
@@ -604,6 +628,13 @@ public sealed partial class MonitorEngine
         }
         if (host.Kind.IsScheduler())
         {
+            if (parsed.Get("alloc") is { } allocSec)
+            {
+                if (!AllocCache.TryGetValue(host.Id, out var c)) AllocCache[host.Id] = c = [];
+                foreach (var (k, v) in Parsers.Allocs(allocSec.Lines)) c[k] = v;
+            }
+            if (AllocCache.TryGetValue(host.Id, out var known))
+                foreach (var j in jobs.Where(j => j.Source == JobSource.Slurm)) j.Alloc = known.GetValueOrDefault(j.Id);
             jobs = Parsers.GroupArrays(jobs);
             foreach (var j in jobs.Where(j => j.Array != null)) ApplyTrack(host.Id, j);
         }
@@ -727,11 +758,18 @@ public sealed partial class MonitorEngine
                 if (newByID.TryGetValue(job.Id, out var n2))
                 {
                     if (job.State == JobState.Pending && n2.State == JobState.Running)
-                        batch.Add(new IslandEvent(EventKind.Started, L($"{n2.Name} 开始运行", $"{n2.Name} started"), n2.Detail, host.DisplayName, host.Id, n2.Id));
+                    {
+                        var p = new PushInfo(n2) { Elapsed = null };
+                        var first = n2.Detail.Split(" · ")[0];
+                        if (first.Length > 0 && !first.StartsWith('(') && first != n2.Partition) p.NodeList = first;
+                        batch.Add(new IslandEvent(EventKind.Started, L($"{n2.Name} 开始运行", $"{n2.Name} started"), n2.Detail, host.DisplayName, host.Id, n2.Id, p));
+                    }
                     else if (job.Source == JobSource.ProgressFile && n2.State == JobState.Completed)
-                        batch.Add(new IslandEvent(EventKind.Finished, L($"{n2.Name} 已完成", $"{n2.Name} finished"), n2.Message ?? "", host.DisplayName, host.Id, n2.Id));
+                        batch.Add(new IslandEvent(EventKind.Finished, L($"{n2.Name} 已完成", $"{n2.Name} finished"), n2.Message ?? "", host.DisplayName, host.Id, n2.Id,
+                            new PushInfo(n2) { Note = n2.Message }));
                     else if (job.Source == JobSource.ProgressFile && n2.State == JobState.Failed)
-                        batch.Add(new IslandEvent(EventKind.Failed, L($"{n2.Name} 失败", $"{n2.Name} failed"), n2.Message ?? "", host.DisplayName, host.Id, n2.Id));
+                        batch.Add(new IslandEvent(EventKind.Failed, L($"{n2.Name} 失败", $"{n2.Name} failed"), n2.Message ?? "", host.DisplayName, host.Id, n2.Id,
+                            new PushInfo(n2) { Note = n2.Message }));
                 }
                 else if (job.Source == JobSource.Slurm || job.Watched || (job.Elapsed ?? 0) >= 30)
                 {
@@ -747,11 +785,16 @@ public sealed partial class MonitorEngine
 
             var slurmJobs = vanished.Where(j => j.Source == JobSource.Slurm).ToList();
             var finals = new Dictionary<string, SacctFinal>();
+            var finalAllocs = new Dictionary<string, JobAlloc>();
             if (slurmJobs.Count > 0)
             {
                 // 只在作业从队列中消失时调用一次 sacct（sacct 查数据库，比 squeue 更重）。
                 var r = await Run(host, RemoteScript.SacctScript(host, slurmJobs.Select(j => j.Id)), 20);
-                if (RemoteScript.Parse(r.Stdout).Get("sacct") is { } sec) finals = Parsers.Sacct(sec.Lines);
+                if (RemoteScript.Parse(r.Stdout).Get("sacct") is { } sec)
+                {
+                    finals = Parsers.Sacct(sec.Lines);
+                    finalAllocs = Parsers.SacctAllocs(sec.Lines);
+                }
                 // 作业刚离开队列时 sacct 可能还没写入最终状态（仍是 RUNNING / COMPLETING），稍等再查一次。
                 var unsettled = slurmJobs.Where(j => finals.TryGetValue(j.Id, out var f) && f.State.IsActive()).ToList();
                 if (unsettled.Count > 0)
@@ -759,7 +802,10 @@ public sealed partial class MonitorEngine
                     await Task.Delay(TimeSpan.FromSeconds(20));
                     var r2 = await Run(host, RemoteScript.SacctScript(host, unsettled.Select(j => j.Id)), 20);
                     if (RemoteScript.Parse(r2.Stdout).Get("sacct") is { } sec2)
+                    {
                         foreach (var (k, v) in Parsers.Sacct(sec2.Lines)) finals[k] = v;
+                        foreach (var (k, v) in Parsers.SacctAllocs(sec2.Lines)) finalAllocs[k] = v;
+                    }
                 }
             }
 
@@ -770,6 +816,17 @@ public sealed partial class MonitorEngine
                     case JobSource.Slurm:
                     {
                         var f = finals.GetValueOrDefault(job.Id);
+                        var alloc = JobAlloc.Best(finalAllocs.GetValueOrDefault(job.Id), job.Alloc);
+                        var cost = RecordCost(host, job.Id, job.Name, job.Partition, alloc, job.Nodes, f?.Elapsed ?? job.Elapsed);
+                        var p = new PushInfo(job);
+                        p.SetAlloc(alloc);
+                        p.Cost = cost is { } cv ? Billing.Money(cv, Store.Settings.Currency) : null;
+                        if (f != null)
+                        {
+                            p.State = f.Raw;
+                            p.ExitCode = string.IsNullOrEmpty(f.Exit) ? null : f.Exit;
+                            if (f.Elapsed is { } fe) p.Elapsed = fe;
+                        }
                         // 没有 sacct（集群未开启作业记录）但识别到了计算软件：用输出文件的最终状态判断成功与否。
                         if (f == null && job.App is { } app)
                         {
@@ -786,9 +843,12 @@ public sealed partial class MonitorEngine
                                 Note = L($"按 {final.Title} 输出判断：{posText}", $"from {final.Title} output: {posText}"),
                                 Dir = job.Workdir ?? app.Dir,
                             });
+                            p.SetApp(final);
+                            if (!done) p.AppNote = AppStopNote(final);
+                            p.Note = L($"集群没有作业记录，按 {final.Title} 的输出判断", $"no job accounting; judged from {final.Title} output");
                             batch.Add(new IslandEvent(done ? EventKind.Finished : final.CanJudge ? EventKind.Failed : EventKind.Info,
                                 $"{job.Name} " + (done ? L("已完成", "finished") : final.CanJudge ? L("提前结束", "ended early") : L("已离开队列", "left the queue")),
-                                $"{final.Title} {posText} · #{job.Id}", host.DisplayName, host.Id, job.Id));
+                                $"{final.Title} {posText} · #{job.Id}", host.DisplayName, host.Id, job.Id, p));
                             continue;
                         }
                         var outcome = SlurmOutcome(f);
@@ -801,21 +861,24 @@ public sealed partial class MonitorEngine
                         });
                         var elapsed = f?.Elapsed ?? job.Elapsed;
                         var time = elapsed is { } el ? L("用时 ", "took ") + Format.Duration(el) : "";
+                        if (outcome.Kind == EventKind.Failed && job.App is { } fa) p.AppNote = AppStopNote(fa);
+                        if (outcome.Kind != EventKind.Failed) { p.State = null; p.ExitCode = null; }
                         switch (outcome.Kind)
                         {
                             case EventKind.Failed:
                                 batch.Add(new IslandEvent(EventKind.Failed, $"{job.Name} {f?.State.Label()}",
-                                    string.Join(" · ", new[] { Capitalized(f?.Raw ?? ""), time }.Where(s => s.Length > 0)), host.DisplayName, host.Id, job.Id));
+                                    string.Join(" · ", new[] { Capitalized(f?.Raw ?? ""), time }.Where(s => s.Length > 0)), host.DisplayName, host.Id, job.Id, p));
                                 break;
                             case EventKind.Finished:
-                                batch.Add(new IslandEvent(EventKind.Finished, L($"{job.Name} 已完成", $"{job.Name} finished"), time, host.DisplayName, host.Id, job.Id));
+                                batch.Add(new IslandEvent(EventKind.Finished, L($"{job.Name} 已完成", $"{job.Name} finished"), time, host.DisplayName, host.Id, job.Id, p));
                                 break;
                             default:
                                 // 只知道离开了队列，不能断定成功。
                                 var why = f == null ? L("集群未开启作业记录，无法确认成功或失败", "no job accounting; result unknown")
                                     : L($"作业记录显示 {f.Raw}，无法确认成功或失败", $"accounting shows {f.Raw}; result unknown");
+                                p.Note = why;
                                 batch.Add(new IslandEvent(EventKind.Info, L($"{job.Name} 已离开队列", $"{job.Name} left the queue"),
-                                    string.Join(" · ", new[] { why, time }.Where(s => s.Length > 0)), host.DisplayName, host.Id, job.Id));
+                                    string.Join(" · ", new[] { why, time }.Where(s => s.Length > 0)), host.DisplayName, host.Id, job.Id, p));
                                 break;
                         }
                         break;
@@ -837,20 +900,24 @@ public sealed partial class MonitorEngine
                             if (AppDetectors.Parse(r.Stdout.Split('\n')).GetValueOrDefault(job.Id) is { } fresh) finalApp = fresh;
                             DebugLog.Log($"[{host.DisplayName}] {app.Title}结束时的最终状态：{(finalApp?.Current is { } c1 ? AppProgress.Compact(c1) : "?")}/{(finalApp?.Total is { } t1 ? AppProgress.Compact(t1) : "?")}");
                         }
+                        var pp = new PushInfo(job);
+                        if (finalApp != null) pp.SetApp(finalApp);
                         if (finalApp is { CanJudge: true, Current: { } c })
                         {
                             // 计算软件：没到目标 / 没有正常结束标记就退出，基本是出错或被杀。
                             bool done = finalApp.Finished;
                             var folder = Text.LastPathComponent(finalApp.Dir);
                             var pos = AppProgress.Compact(c) + (finalApp.Total is { } t ? "/" + AppProgress.Compact(t) : "") + " " + finalApp.Unit;
+                            if (!done) pp.AppNote = AppStopNote(finalApp);
                             batch.Add(new IslandEvent(done ? EventKind.Finished : EventKind.Failed,
                                 finalApp.Title + (done ? L("完成", " finished") : L("提前结束", " ended early")),
-                                (done ? pos : L("停在 ", "stopped at ") + pos) + " · " + folder, host.DisplayName, host.Id, job.Id));
+                                (done ? pos : L("停在 ", "stopped at ") + pos) + " · " + folder, host.DisplayName, host.Id, job.Id, pp));
                         }
                         else
                         {
+                            pp.Note = L("进程已退出（看不到退出码，无法判断成功与否）", "process exited (no exit code, so success is unknown)");
                             batch.Add(new IslandEvent(EventKind.Finished, L($"{job.Name} 已结束", $"{job.Name} ended"),
-                                job.Elapsed is { } e ? L("运行了至少 ", "ran for at least ") + Format.Duration(e) : "", host.DisplayName, host.Id, job.Id));
+                                job.Elapsed is { } e ? L("运行了至少 ", "ran for at least ") + Format.Duration(e) : "", host.DisplayName, host.Id, job.Id, pp));
                         }
                         break;
                     }
@@ -882,11 +949,19 @@ public sealed partial class MonitorEngine
         // 一次 sacct 查完：离开运行的元素 + 已经整体结束的数组（取全部元素的最终状态）。
         var ids = elements.Select(e => e.Job.Id).Concat(finished.Where(j => j.Array != null).Select(j => j.Array!.BaseID)).Distinct().ToList();
         var finals = new Dictionary<string, SacctFinal>();
+        var finalAllocs = new Dictionary<string, JobAlloc>();
         if (ids.Count > 0 && !SacctUnsupported.Contains(host.Id))
         {
             var r = await Run(host, RemoteScript.SacctScript(host, ids), 25);
-            if (RemoteScript.Parse(r.Stdout).Get("sacct") is { } sec) finals = Parsers.Sacct(sec.Lines);
+            if (RemoteScript.Parse(r.Stdout).Get("sacct") is { } sec)
+            {
+                finals = Parsers.Sacct(sec.Lines);
+                finalAllocs = Parsers.SacctAllocs(sec.Lines);
+            }
         }
+        foreach (var (bas, e) in elements)
+            RecordCost(host, e.Id, e.Name, e.Partition, JobAlloc.Best(finalAllocs.GetValueOrDefault(e.Id), e.Alloc), e.Nodes,
+                       finals.GetValueOrDefault(e.Id)?.Elapsed ?? e.Elapsed, arrayBase: bas);
         var finishedBases = finished.Where(j => j.Array != null).Select(j => j.Array!.BaseID).ToHashSet();
         foreach (var (bas, e) in elements.Where(x => !finishedBases.Contains(x.Base)))
         {
@@ -899,9 +974,14 @@ public sealed partial class MonitorEngine
                 if (!t.AlertedFailure && Store.Settings.ArrayFirstFailureAlert)
                 {
                     t.AlertedFailure = true;
+                    var p = new PushInfo(e) { Id = bas, State = fe?.Raw ?? st.Label(), ExitCode = string.IsNullOrEmpty(fe?.Exit) ? null : fe!.Exit };
+                    p.SetAlloc(finalAllocs.GetValueOrDefault(e.Id));
+                    if (fe?.Elapsed is { } fel) p.Elapsed = fel;
+                    p.FailedElements = [ElementLabel(e.Id, bas)];
+                    p.Note = L("其余元素还在继续；之后的失败不再单独提醒", "other elements keep running; later failures won't alert separately");
                     batch.Add(new IslandEvent(EventKind.Failed, L($"{e.Name} 数组中有元素失败", $"{e.Name}: an array element failed"),
                         $"#{e.Id} {fe?.Raw ?? st.Label()}" + L(" · 之后的失败不再单独提醒", " · later failures won't alert separately"),
-                        host.DisplayName, host.Id, bas));
+                        host.DisplayName, host.Id, bas, p));
                 }
             }
             else t.Done += 1;
@@ -914,7 +994,8 @@ public sealed partial class MonitorEngine
             var key = ArrayKey(host.Id, a.BaseID);
             if (!ArrayTracks.TryGetValue(key, out var t)) t = new ArrayTrack();
             t.Total = Math.Max(t.Total, a.Total);
-            var mine = finals.Where(kv => kv.Key.StartsWith(a.BaseID + "_") && !kv.Key.Contains('[')).Select(kv => kv.Value).ToList();
+            var mineKV = finals.Where(kv => kv.Key.StartsWith(a.BaseID + "_") && !kv.Key.Contains('[')).ToList();
+            var mine = mineKV.Select(kv => kv.Value).ToList();
             if (mine.Count > 0)
             {
                 var c = ArrayCounts(mine.Select(f => f.State), t.Total);
@@ -938,19 +1019,34 @@ public sealed partial class MonitorEngine
             });
             var unconfirmed = mine.Count == 0 ? L("（sacct 不可用，结果未确认）", " (no sacct; unconfirmed)")
                                               : L("（部分元素的结果还未确认）", " (some results unconfirmed)");
+            var result = L($"{t.Done} 个成功", $"{t.Done} done") + (t.Failed > 0 ? L($" · {t.Failed} 个失败", $" · {t.Failed} failed") : "")
+                    + L($" / 共 {total} 个", $" / {total} total");
+            var ap = new PushInfo(job) { Elapsed = null, Cpus = null, Gpus = null, Nodes = null, Array = result + (t.Accurate ? "" : unconfirmed) };
+            ap.FailedElements = mineKV.Where(kv => kv.Value.State is JobState.Failed or JobState.Timeout or JobState.Cancelled)
+                .Select(kv => ElementLabel(kv.Key, a.BaseID))
+                .OrderBy(x => int.TryParse(x[1..], out var n) ? n : 0).ToList();
+            ap.Cost = Costs.CostOf(host.Id, a.BaseID) is { } ac ? Billing.Money(ac, Store.Settings.Currency) : null;
             batch.Add(new IslandEvent(outcome.Kind,
                 L($"{job.Name} 数组已全部结束", $"{job.Name}: array finished"),
-                L($"{t.Done} 个成功", $"{t.Done} done") + (t.Failed > 0 ? L($" · {t.Failed} 个失败", $" · {t.Failed} failed") : "")
-                    + L($" / 共 {total} 个", $" / {total} total") + (t.Accurate ? "" : unconfirmed),
-                host.DisplayName, host.Id, a.BaseID));
+                result + (t.Accurate ? "" : unconfirmed),
+                host.DisplayName, host.Id, a.BaseID, ap));
             ArrayTracks.Remove(key);
         }
     }
+
+    /// 数组元素的显示编号：12400_17 → #17。
+    public static string ElementLabel(string id, string bas) => "#" + (id.StartsWith(bas + "_") ? id[(bas.Length + 1)..] : id);
+
+    /// 计算软件没跑完时补一句：输出文件多久之前停止更新。
+    public static string? AppStopNote(AppProgress app, DateTime? now = null) =>
+        app.UpdatedAt is { } u ? L("输出文件最后更新于 ", "output last updated ") + Format.Relative(u, now) : null;
 
     /// 同一次轮询里事件太多时合并成一条，避免连续弹窗。
     /// 先按提醒设置（种类、关注范围）过滤，再合并。
     void Flush(List<IslandEvent> batch, HostConfig host)
     {
+        // 手机推送有自己的范围设置（默认只推送关注的任务），先拿到完整的一批再各自过滤。
+        PhonePush.Consider(batch, Store.Host(host.Id) ?? host, host.Watched.Select(w => w.Pid).ToHashSet());
         batch = Alertable(batch, Store.Settings, host.Watched.Select(w => w.Pid).ToHashSet());
         if (batch.Count == 0) return;
         if (batch.Count <= 2) { batch.ForEach(Emit); return; }
@@ -1198,14 +1294,18 @@ public sealed partial class MonitorEngine
     {
         _demoTick++;
         Snapshots[host.Id] = DemoData.Snapshot(host, _demoTick);
+        if (host.Kind.IsScheduler() && Costs.Entries.Count == 0) Costs.ReplaceAll(DemoData.CostEntries(host.Id));
         NotifyChanged();
         if (_demoTick % 30 == 0 && host.Kind.IsScheduler())
         {
             bool fail = _demoTick % 60 == 0;
-            Emit(new IslandEvent(fail ? EventKind.Failed : EventKind.Finished,
+            var ev = new IslandEvent(fail ? EventKind.Failed : EventKind.Finished,
                 fail ? L("eval_mmlu 失败", "eval_mmlu failed") : L("pretrain_7b 已完成", "pretrain_7b finished"),
                 fail ? L("OUT_OF_MEMORY · 用时 0:42:18", "OUT_OF_MEMORY · took 0:42:18") : L("用时 11:42:05", "took 11:42:05"),
-                host.DisplayName, host.Id));
+                host.DisplayName, host.Id);
+            // 演示模式默认不推送；SERVERISLAND_PUSH_DEMO=1 时用来试推送（见 PhonePush.Consider）。
+            PhonePush.Consider([ev], host);
+            Emit(ev);
         }
     }
 }

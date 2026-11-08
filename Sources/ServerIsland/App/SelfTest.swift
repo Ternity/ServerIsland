@@ -226,7 +226,7 @@ enum SelfTest {
         check(PendingReason.explain("DependencyNeverSatisfied")?.needsAction == true
               && PendingReason.explain("Dependency")?.short == "等待依赖作业"
               && PendingReason.explain("AssocGrpBillingRunMinutes")?.short == "组计费额度已满"
-              && PendingReason.explain("Job's QOS not permitted to use this partition (CPU-MISC allows rush-cpu)")?.needsAction == true,
+              && PendingReason.explain("Job's QOS not permitted to use this partition (cpu-debug allows short-qos)")?.needsAction == true,
               "排队原因翻译")
         // sinfo -N -O 的 Gres / GresUsed：NVIDIA 的 gpu、曙光（海光）的 dcu；"dcu:0,gpu:0" 不算一种卡
         let parts = Partitions.parse(RemoteScript.parse([
@@ -250,6 +250,8 @@ enum SelfTest {
         SelfTestConnection.run(check)
         SelfTestPBS.run(check)
         SelfTestMonitor.run(check)
+        SelfTestBilling.run(check)
+        SelfTestPush.run(check)
         return ok
     }
 
@@ -302,5 +304,46 @@ enum SelfTest {
         }
         let h = await engine.fetchHistory(host: host)
         print("\nhistory: fromServer=\(h.fromServer) count=\(h.entries.count)")
+        if host.kind.isScheduler { await diagnoseBilling(engine: engine, store: store, host: host) }
+    }
+
+    /// 计费（只读）：用临时单价（每卡时 1、其他每核时 0.01）再采一轮，打印每个作业的分区、分到的资源和估算费用；
+    /// 再用 sacct / qstat -x 查最近结束的作业的 AllocTRES，读取分区列表。不改设置、不写账本。
+    @MainActor
+    static func diagnoseBilling(engine: MonitorEngine, store: ConfigStore, host original: HostConfig) async {
+        print("\n===== 计费（临时单价，只读） =====")
+        var host = original
+        let parts = await engine.fetchBillingPartitions(host: host)
+        print("partitions:", parts.error ?? parts.list.map { "\($0.name)[\($0.note)]" }.joined(separator: "  "))
+        // 设置里已经填了单价就用它，否则临时单价
+        if !host.prices.contains(where: { $0.price > 0 }) {
+            host.prices = [PartitionPrice(partition: "", unit: .cpu, price: 0.01)]
+            for p in parts.list where p.hasGPU { host.prices.append(PartitionPrice(partition: p.name, unit: .gpu, price: 1)) }
+        }
+        print("prices:", host.prices.map { "\($0.partition.isEmpty ? "*" : $0.partition)=\($0.price)/\($0.unit.rawValue)" })
+        store.settings.hosts = [host]
+        store.settings.billingEnabled = true
+        let query = engine.allocQuery(host) ?? RemoteScript.AllocRequest()
+        print("alloc query:", query)
+        do {
+            let raw = await SSHRunner.run(host: host, remoteCommand: host.commands.shell, script: RemoteScript.build(for: host, alloc: query))
+            let sec = RemoteScript.parse(raw.stdout).sections["alloc"]
+            print("alloc section (rc \(sec?.exitCode ?? -1)):", sec?.lines ?? [])
+        }
+        await engine.pollForDiagnosis(host)
+        for j in engine.snapshots[host.id]?.jobs ?? [] where j.source == .slurm {
+            let c = engine.liveCost(host, j)
+            print("job:", j.id, j.state, "partition=\(j.partition ?? "-") nodes=\(j.nodes ?? -1) alloc=\(j.alloc.map { "cpu \($0.cpus ?? -1) gpu \($0.gpus ?? -1) node \($0.nodes ?? -1)" } ?? "-")",
+                  c.map { "≈\(Billing.money($0.spent, currency: "¥")) \(Billing.money($0.perHour, currency: "¥"))/h \($0.detail)" } ?? "")
+        }
+        let ids = await engine.fetchHistory(host: host).entries.prefix(3).map(\.id)
+        if !ids.isEmpty {
+            let r = await SSHRunner.run(host: host, remoteCommand: host.commands.shell,
+                                        script: RemoteScript.sacctScript(for: host, jobIDs: ids), timeout: 20)
+            let lines = RemoteScript.parse(r.stdout).sections["sacct"]?.lines ?? []
+            print("sacct:", lines.prefix(3))
+            print("sacct allocs:", Parsers.sacctAllocs(lines))
+        }
+        store.settings.billingEnabled = false
     }
 }

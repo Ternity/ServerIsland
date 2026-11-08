@@ -62,7 +62,7 @@ enum AppCurves {
     static func sources(for app: AppProgress) -> [Source] {
         switch app.kind {
         case .nep, .gnep: return [.loss(path: app.dir + "/loss.out", kind: app.kind)]
-        case .torchnep, .mace: return app.dataFile.map { [.loss(path: app.dir + "/" + $0, kind: app.kind)] } ?? []
+        case .torchnep, .mace, .deepmd: return app.dataFile.map { [.loss(path: app.dir + "/" + $0, kind: app.kind)] } ?? []
         case .vasp where app.vaspMode == .relax: return [.vaspEnergy(path: app.dir + "/OSZICAR"), .vaspForce(path: app.dir + "/OUTCAR")]
         case .vasp where app.vaspMode == .neb: return [.neb(dir: app.dir)]
         default: return []
@@ -248,6 +248,8 @@ enum AppCurves {
         if case .neb = src { return nebCurves(rows: rows, extra: extra).first }
         guard rows.count >= 2 else { return nil }
         switch src {
+        case .loss(_, .deepmd):
+            return deepmdCurve(rows: rows, header: extra["head"] ?? "")
         case .loss(_, let kind):
             var data = rows
             var names: [String]
@@ -315,6 +317,33 @@ enum AppCurves {
                             series: [.init(name: "|F|max", points: downsample(pts)), .init(name: L("最低", "lowest"), points: downsample(lows), faint: true)],
                             logY: true, xLabel: L("离子步", "ionic step"), threshold: target, note: note)
         }
+    }
+
+    /// DeePMD lcurve.out：能量、力、维里各画一条，有验证集用验证集（多任务取第一个任务），没有就用训练集；
+    /// 三项都没有时画总误差。续跑（--restart）时 lcurve.out 追加写入，步数接着数；从较早的检查点续跑时去掉重跑的那段。
+    static func deepmdCurve(rows: [[Double]], header: String) -> AppCurve? {
+        let names = AppDetectors.deepmdLabels(header)
+        let data = monotonic(rows.filter { $0.count == names.count })
+        func points(_ i: Int) -> [CGPoint] {
+            data.compactMap { r in r[i].isFinite && r[i] > 0 ? CGPoint(x: r[0], y: r[i]) : nil }
+        }
+        func column(_ q: String?, _ split: String) -> Int? {
+            names.indices.dropFirst().first { i in
+                let w = names[i].split(separator: " ").map(String.init)
+                let hasQ = q.map { w.contains($0) } ?? !w.contains { ["E", "F", "V"].contains($0) }
+                return w.contains(split) && hasQ && points(i).count >= 2
+            }
+        }
+        var series: [AppCurve.Series] = []
+        for (q, name) in [("E", L("能量", "Energy")), ("F", L("力", "Force")), ("V", L("维里", "Virial"))] {
+            if let i = column(q, "val") { series.append(.init(name: name, points: downsample(points(i)))) }
+            else if let i = column(q, "trn") { series.append(.init(name: name + L("（训练集）", " (train)"), points: downsample(points(i)))) }
+        }
+        if series.isEmpty, let i = column(nil, "val") ?? column(nil, "trn") {
+            series.append(.init(name: names[i], points: downsample(points(i))))
+        }
+        guard !series.isEmpty else { return nil }
+        return AppCurve(title: "Loss", series: series, logY: true, xLabel: L("步", "step"))
     }
 
     /// 横轴倒退（从较早的检查点续跑，日志 / loss.out 是追加写入的）时，丢掉之前跑过、又被重跑的那一段。
