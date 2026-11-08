@@ -35,10 +35,12 @@
 ## Features
 
 - **Every Server at a Glance**: Hover the notch to see one card per server — running / pending counts, CPU, memory and GPUs. Idle servers fold into a single line.
-- **Real Progress, Not Just "RUNNING"**: Detects NEP, GPUMD, VASP and LAMMPS from the job's working directory and shows progress, speed and ETA, plus loss curves and, for VASP relaxations, energy and max-force curves.
+- **Real Progress, Not Just "RUNNING"**: Detects NEP, TorchNEP, MACE, DeePMD-kit, GPUMD, VASP and LAMMPS from the job's working directory and shows progress, speed and ETA, plus loss curves and, for VASP relaxations, energy and max-force curves.
 - **Slurm and PBS Done Right**: Job arrays as one segmented bar, pending reasons in plain words, free CPUs / GPUs / DCUs per Slurm partition, and 7 days of history with each job's folder. PBS Pro, OpenPBS and Torque work too.
 - **Only What You Care About**: Limit a server to jobs and processes under certain folders, e.g. `~/projects/LLZO`.
-- **Alerts You Can Hear**: A notch pop-up with distinct sounds for success and failure — it can tell a clean finish from an early exit even without Slurm accounting.
+- **Alerts You Can Hear**: A notch pop-up with distinct sounds for success and failure — it can tell a clean finish from an early exit even without Slurm accounting. Star the jobs that matter, alert for starred jobs only, and set quiet hours.
+- **On Your Phone, Too**: Paste a WeCom group bot's webhook and starred jobs (or all of them) send a detailed message to WeCom / WeChat when they finish or fail — sent by your computer, so your phone never connects to the servers.
+- **What It Cost**: Set a price per partition and see estimated costs per job, per day and per month from what the scheduler allocated.
 - **Your Own Programs, Too**: Write a custom rule (a file name + a keyword or regex) and test it against a real directory right from Settings.
 - **Zero Footprint**: No agent, no daemon, no root. One SSH channel per server per poll, reusing a single connection; your `~/.ssh/config` just works — or type the address, user, port and key into Settings if you never wrote one.
 - **Any Login**: Key, password, key + password, or one-time codes, optionally through one or more jump hosts — each hop asks and reports errors on its own.
@@ -50,6 +52,9 @@
 | Software | Detected from | What you see |
 |---|---|---|
 | **NEP / GNEP** | `loss.out` + `nep.in` / `gnep.in` | generation, losses, speed, ETA, loss curve |
+| **TorchNEP** | `loss.out` with a `# epoch  loss …` header | epochs, errors, speed, ETA, error curves |
+| **MACE** | `logs/*.log` | epoch / `max_num_epochs`, validation errors and curves |
+| **DeePMD-kit** | `lcurve.out` + log / `input.json` | steps, energy / force errors, E / F / V curves (TensorFlow and PyTorch) |
 | **GPUMD** | `run.in` + `neighbor.out` / `thermo.out` | steps, speed, ETA |
 | **VASP** | `INCAR` + `OSZICAR` | MD as a percentage · relaxation as ionic steps with an energy curve · SCF as electronic steps |
 | **LAMMPS** | `log.lammps` | steps of the last `run`; `Total wall time` marks a clean finish |
@@ -145,6 +150,8 @@ On macOS and Linux, ServerIsland uses the system `ssh` with a shared connection 
 - [x] Windows and Linux versions
 - [x] Display selection on multi-monitor setups
 - [x] One-click updates, server reordering, a terminal button on each card
+- [x] Starred jobs, an all-jobs page, quiet hours, settings import / export, TorchNEP and MACE
+- [x] Phone push (WeCom / WeChat), cost estimates, DeePMD-kit
 - [ ] More packages: CP2K, Quantum ESPRESSO, ABACUS, Gaussian, ORCA
 - [ ] LSF
 
