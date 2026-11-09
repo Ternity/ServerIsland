@@ -1,3 +1,9 @@
+> **Unofficial fork**: this repository is a modified copy of [zhyan0603/ServerIsland](https://github.com/zhyan0603/ServerIsland)
+> **v0.5.0 (GPL-3.0)**, changed on 2026-11-09 for **Windows**: the island window's topmost z-order handling,
+> the second-instance behaviour (double-clicking the exe brings the island back) and the update-check / issue URLs.
+> Upstream and copyright belong to Zihan Yan and contributors; this fork stays under **GPL-3.0**, its source is this
+> repository (see the tag of each release).
+
 <p align="center">
   <img src="./Branding/logo-1024.png" width="22%" alt="ServerIsland Logo">
 </p>

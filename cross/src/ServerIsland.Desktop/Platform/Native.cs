@@ -30,13 +30,30 @@ public static class Native
         if (h == IntPtr.Zero) return;
         long style = GetWindowLongPtr(h, GWL_EXSTYLE).ToInt64();
         long next = (style | add) & ~remove;
-        if (next != style) SetWindowLongPtr(h, GWL_EXSTYLE, new IntPtr(next));
+        if (next != style)
+        {
+            SetWindowLongPtr(h, GWL_EXSTYLE, new IntPtr(next));
+            // 只写扩展样式不会动 z 序：写完补一次 SetWindowPos(SWP_FRAMECHANGED)，
+            // 既让 Windows 重新评估框架，也顺带按 Topmost 重申一次置顶（否则可能「位在、带失」）。
+            if (OperatingSystem.IsWindows()) WinTopmost.FlushStyles(w, w.Topmost);
+        }
     }
 
     public static void SetNoActivate(Window w, bool on) =>
         ChangeExStyle(w, on ? WS_EX_NOACTIVATE : 0, on ? 0 : WS_EX_NOACTIVATE);
 
     public static void SetToolWindow(Window w) => ChangeExStyle(w, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW);
+
+    /// 把窗口重新放回「置顶」z 序带（Windows 专属，其它平台空实现）。
+    /// Avalonia 的 Topmost 只在值变化时下发 SetWindowPos，这里给程序一个「必要时重申」的入口。
+    public static void EnsureTopmost(Window w)
+    {
+        if (OperatingSystem.IsWindows()) WinTopmost.Raise(w);
+    }
+
+    /// 形状中心上压着的是不是别人的普通窗口（= 已经掉出置顶带）。只有 Windows 能查。
+    public static bool IsTopmostLost(Window w, PixelPoint screenPoint) =>
+        OperatingSystem.IsWindows() && WinTopmost.IsCoveredByNormalWindow(w, screenPoint);
 
     /// 屏幕上的鼠标位置（物理像素）。拿不到时返回 null。
     public static PixelPoint? CursorPosition()

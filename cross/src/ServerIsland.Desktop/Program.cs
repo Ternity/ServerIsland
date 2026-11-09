@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Avalonia;
 using ServerIsland.Core;
 using ServerIsland.Core.Ssh;
+using ServerIsland.Desktop.Platform;
 
 namespace ServerIsland.Desktop;
 
@@ -128,7 +129,15 @@ static class Program
         // 自动更新后由旧程序启动：先等旧程序退出，再去抢"只运行一个"的锁
         if (Index(args, "--after-update") is { } au && au + 1 < args.Length && int.TryParse(args[au + 1], out var oldPid))
             UpdateInstaller.WaitForExit(oldPid);
-        if (!Demo && !SingleInstance.TryAcquire()) return 0;   // 已经在运行
+        if (!Demo)
+        {
+            if (!SingleInstance.TryAcquire())
+            {
+                WinSingleInstance.RaiseExisting();   // 已经在运行：让它把岛重新显出来，再静默退出
+                return 0;
+            }
+            WinSingleInstance.Create();              // 第一个实例：准备接收「把岛叫出来」的信号
+        }
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args, Avalonia.Controls.ShutdownMode.OnExplicitShutdown);
         return 0;
     }
@@ -161,8 +170,8 @@ public static class AppInfo
     public static string Version =>
         typeof(AppInfo).Assembly.GetName().Version is { } v ? $"{v.Major}.{v.Minor}.{v.Build}" : "dev";
 
-    public const string Repo = "https://github.com/zhyan0603/ServerIsland";
-    public const string Issues = "https://github.com/zhyan0603/ServerIsland/issues";
+    public const string Repo = "https://github.com/Ternity/ServerIsland";
+    public const string Issues = "https://github.com/Ternity/ServerIsland/issues";
 }
 
 /// 只允许运行一个实例（两个实例会同时轮询、同时弹窗）。

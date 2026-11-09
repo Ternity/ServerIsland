@@ -24,7 +24,7 @@ public static class UpdateChecker
     /// 状态变化（可能在后台线程上触发）。
     public static event Action? Changed;
 
-    public const string ApiUrl = "https://api.github.com/repos/zhyan0603/ServerIsland/releases/latest";
+    public const string ApiUrl = "https://api.github.com/repos/Ternity/ServerIsland/releases/latest";
     /// 当前版本，由程序启动时设置（`AppInfo.Version`）。
     public static string CurrentVersion { get; set; } = "dev";
 

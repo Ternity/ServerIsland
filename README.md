@@ -1,3 +1,7 @@
+> **非官方分支（unofficial fork）**：本仓库是 [zhyan0603/ServerIsland](https://github.com/zhyan0603/ServerIsland) **v0.5.0（GPL-3.0）** 的修改版，
+> 2026-11-09 针对 **Windows** 版修改了：灵动岛窗口的置顶（topmost z 序）处理、单实例「双击 exe 把岛叫出来」的行为、以及自动更新/问题反馈的地址。
+> 上游与版权归 Zihan Yan 及贡献者所有；本分支同样以 **GPL-3.0** 发布，源码即本仓库（每次发布的提交见对应 tag）。
+
 <p align="center">
   <img src="./Branding/logo-1024.png" width="22%" alt="ServerIsland Logo">
 </p>

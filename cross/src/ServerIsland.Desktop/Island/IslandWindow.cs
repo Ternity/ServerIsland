@@ -27,7 +27,7 @@ public sealed class IslandWindow : Window
     bool _rebuildPending, _shownOnce;
     Point? _pointer;
     IDisposable? _expandTimer, _collapseTimer;
-    readonly DispatcherTimer _liveTimer, _watchTimer;
+    readonly DispatcherTimer _liveTimer, _watchTimer, _topTimer;
     bool _petHover;
 
     /// 桌宠模式：面板浮在小章鱼旁边。返回小章鱼窗口在屏幕上的矩形（物理像素）。
@@ -76,6 +76,10 @@ public sealed class IslandWindow : Window
         // 保险：菜单关闭后鼠标可能已经不在窗口上，收不到 PointerExited；展开期间每 0.25 秒用系统光标位置核对一次。
         _watchTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(250), DispatcherPriority.Background, (_, _) => CheckPointer());
         _watchTimer.Start();
+        // 保险：Windows 上偶尔会被系统挪出「置顶」z 序带（样式位还在、带没了），
+        // 那样会被同屏最大化的普通窗口整块盖住，看起来就是「岛消失了」。每 2 秒核对一次，掉了就抬回来。
+        _topTimer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => GuardTopmost());
+        _topTimer.Start();
     }
 
     Rect _inputRect;
@@ -89,8 +93,10 @@ public sealed class IslandWindow : Window
         Native.SetToolWindow(this);
         UpdateActivation();
         Reposition();
-        Screens.Changed += (_, _) => Reposition();
+        Screens.Changed += (_, _) => { Reposition(); Native.EnsureTopmost(this); };
         Rebuild();
+        Native.EnsureTopmost(this);                // 新窗口刚出来：确认真的进了置顶带
+        WinSingleInstance.Listen(RestoreVisible);  // 第二个实例被双击时，把岛叫出来
     }
 
     /// 平时不抢键盘焦点；只有"全部任务"页（有搜索框）允许成为活动窗口。
@@ -98,7 +104,25 @@ public sealed class IslandWindow : Window
     {
         bool allow = State.Page.Kind == PageKind.Jobs;
         Native.SetNoActivate(this, !allow);
+        Native.EnsureTopmost(this);                // 刚写过 GWL_EXSTYLE，重申一次置顶带
         if (allow && IsVisible) Activate();
+    }
+
+    /// 把岛重新显示出来（单实例转发、系统事件、定时保险都走这里）：不抢焦点、不动位置大小。
+    public void RestoreVisible()
+    {
+        if (!IsVisible) Show();
+        if (Floating) PositionNearPet();
+        else Native.EnsureTopmost(this);
+    }
+
+    /// 定时核对：形状中心上压着别的普通窗口，说明已经掉出置顶带 —— 抬回来。
+    /// 隐藏时、弹出菜单打开时不动 z 序（否则会把岛自己的菜单压到岛下面）。
+    void GuardTopmost()
+    {
+        if (!IsVisible || State.MenusOpen > 0) return;
+        var c = _inputRect.Center;
+        if (Native.IsTopmostLost(this, PointToScreen(new Point(c.X, c.Y)))) Native.EnsureTopmost(this);
     }
 
     public bool ShapeAtTop => _surface.AtTop;

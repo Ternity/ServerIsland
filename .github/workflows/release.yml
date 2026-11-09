@@ -1,0 +1,66 @@
+# 打 tag（v0.5.1）→ 在 Windows runner 上构建并发布 Release。
+#
+# 为什么要守这些约定（见 references/build-and-release.md 与 cross/src/ServerIsland.Core/UpdateChecker.cs）：
+#   - tag 必须是 v<版本号>，且与 cross/Directory.Build.props 的 <Version> 一致；
+#   - 资产名必须以 win-x64.zip 结尾（App 的"检查更新"按后缀匹配）；
+#   - Release 不能是草稿 / 预发布（releases/latest 看不到）；
+#   - GitHub 会给附件算 SHA-256（digest），App 用它校验；没有 digest 的附件不会自动安装。
+name: Release (Windows)
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Tag must match <Version>
+        shell: bash
+        run: |
+          VER="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' cross/Directory.Build.props)"
+          echo "Version=$VER  Tag=$GITHUB_REF_NAME"
+          if [ "v$VER" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match <Version> $VER"
+            exit 1
+          fi
+
+      - name: Self-test
+        shell: bash
+        run: dotnet run --project cross/src/ServerIsland.Desktop -c Release -- --selftest
+
+      - name: Package (single-file, self-contained, zip + LICENSE.txt)
+        shell: bash
+        run: cross/scripts/publish.sh win-x64
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/ServerIsland-*-win-x64.zip
+          draft: false
+          prerelease: false
+          name: ServerIsland ${{ github.ref_name }} (Windows, unofficial fix)
+          body: |
+            Unofficial Windows build of ServerIsland, forked from
+            [zhyan0603/ServerIsland](https://github.com/zhyan0603/ServerIsland) v0.5.0 (GPL-3.0).
+
+            Changes in this build:
+
+            - The island window is re-asserted into the topmost z-order band (on open,
+              after window-style changes, on display/screen changes, and by a 2 s watchdog) —
+              fixes "the island disappears behind a maximized window and only a restart brings it back".
+            - Double-clicking the exe now brings the island back: the second instance
+              notifies the running one through a named event instead of exiting silently.
+            - `SetWindowPos(SWP_FRAMECHANGED)` after `SetWindowLongPtr(GWL_EXSTYLE)` keeps the
+              extended style and the z-order band in sync.
+
+            Source code for this build: https://github.com/Ternity/ServerIsland/tree/${{ github.ref_name }}

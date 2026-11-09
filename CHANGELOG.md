@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.5.1 — unofficial Windows fix (Ternity fork, 2026-11-09)
+
+Fork of upstream v0.5.0 (`1e6393a7`). Windows-only changes; the update check and issue links now point at this fork.
+
+- **Windows: the island no longer gets stuck behind a maximized window.** The window keeps `WS_EX_TOPMOST` but can
+  drop out of the topmost z-order band (seen after the process ran for hours), after which any maximized window
+  covers it completely while `IsWindowVisible` is still true — the island "disappears" until the process is killed.
+  It is now re-asserted into the band on open, after `GWL_EXSTYLE` changes, on `Screens.Changed`, and by a 2 s watchdog.
+- **Windows: double-clicking the exe brings the island back.** The second instance used to exit silently; it now
+  signals the running instance through a named event, which re-raises the island.
+- **Windows: `SetWindowPos(SWP_FRAMECHANGED)` after `SetWindowLongPtr(GWL_EXSTYLE)`** so the extended style and
+  the z-order band stay in sync.
+- Version bumped to 0.5.1; update check / issue URLs point at this fork.
+
 ## v0.5.0 — 2026-11-08
 
 - **Phone push via WeCom** (Settings → Phone Push, off by default): paste a WeCom group bot's webhook and ServerIsland posts job alerts to your phone — in WeCom, or in WeChat with WeCom's WeChat plugin. By default only starred jobs push, so star the jobs you care about before you step away; you can also push all jobs or follow the island's alert settings, and pick Finished / Failed / Unknown / Started, server warnings and coding-agent alerts. Detailed messages include the job ID, partition, resources, run time against the limit, start and end times, the failure reason, app progress, the folder (last two levels, without your username) and the cost; Brief keeps just the title and server. Alerts within 10 seconds are merged, quiet hours are respected (failures can still go through), and the key lives only in the system keychain / credential store (Windows Credential Manager, Secret Service on Linux). Your phone never connects to your servers, and nothing is sent while the computer sleeps.
