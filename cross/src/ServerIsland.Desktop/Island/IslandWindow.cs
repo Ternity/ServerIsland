@@ -122,7 +122,9 @@ public sealed class IslandWindow : Window
     {
         if (!IsVisible || State.MenusOpen > 0) return;
         var c = _inputRect.Center;
-        if (Native.IsTopmostLost(this, PointToScreen(new Point(c.X, c.Y)))) Native.EnsureTopmost(this);
+        var scale = RenderScaling;
+        var screen = new PixelPoint(Position.X + (int)Math.Round(c.X * scale), Position.Y + (int)Math.Round(c.Y * scale));
+        if (Native.IsTopmostLost(this, screen)) Native.EnsureTopmost(this);
     }
 
     public bool ShapeAtTop => _surface.AtTop;
