@@ -1,5 +1,9 @@
 # AGENTS.md — ServerIsland
 
+> ⚠️ **本仓库是 Ternity 维护的非官方 Windows 修复分支（unofficial fork）**，基线是上游 **v0.5.0**（GPL-3.0）。
+> 动手改代码前**先读 [FORK-NOTES.md](./FORK-NOTES.md)**：本分支相对上游改了什么、哪些不变量不能破坏、
+> 怎么构建 / 回归验证 / 发版、怎么和上游同步。下面这份上游文档的其余内容对本仓库同样有效。
+
 > 给 AI 编码助手（以及新加入的开发者）看的项目说明。**新会话开始时先读这一份，再按需读 `references/` 里的专题文档。**
 > 项目开源（GPL-3.0，版权人 Zihan Yan 和贡献者）。维护者用中文交流。界面文案是中英双语，用 `L("中文", "English")` 写。
 
@@ -114,6 +118,8 @@ cross/scripts/build_mac_preview.sh --run              # 打包并在 Mac 上试�
 5. **远端命令一律经过 `SSHRunner.run`**：它会自动在脚本前加上 PATH 补全（`pathPrelude`）；"连接后先执行"（`commands.preamble`）由各脚本自己加。
 6. **会写到服务器上、或改变服务器状态的操作，先征得用户同意**。测试用的作业要短、只占 CPU、跑完自己清理。不能在用户的服务器上执行取消 / kill。
 7. **不要擅自 git commit / push**，等维护者确认。默认在 `dev` 分支上改。
+   （本仓库例外说明：没有 `dev` 分支，直接改 `main`；发版 = 把 `<Version>` 改好后打 `v<版本>` tag 推上去，
+   `.github/workflows/release.yml` 会自动构建、自检并发布 Release。细节见 `FORK-NOTES.md`。）
 8. **仓库是公开的：代码、文档、截图、视频、官网里都不能出现真实的用户名、主机别名、路径、分区名**，演示数据一律用 `DemoData.swift` 里的虚构信息（例外：README 等处维护者主动公开的联系邮箱）（见 `references/website.md`）。维护者自己的环境信息只写在 `references/private/`（被 git 忽略）。
 9. **用户的真实配置在 `~/Library/Application Support/ServerIsland/config.json`**。改它之前先退出 App，否则会被 App 覆盖。
 10. **不改用户的 `~/.ssh/config`**：手动填写的服务器和跳板机只写进 App 私有的 ssh 配置（`ssh -F`）。**密码默认不保存**，用户勾选“记住密码”时只存系统钥匙串 / 凭据库，绝不写进配置文件或日志；动态口令从不保存。跨平台版在 Mac 上用的是另一个目录（`ServerIsland-Avalonia`），不会碰 Swift 版的配置。
